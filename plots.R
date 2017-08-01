@@ -1,5 +1,5 @@
 # read data and adjust data types
-data <- read.csv(file='twitter_data_OneMonth_6000.csv')
+data <- read.csv(file='twitter_data_OneMonth_20170731.csv')
 data$created_at <- as.character(data$created_at)
 data$text <- as.character(data$text)
 data$user_screen_name <- as.character(data$user_screen_name)
@@ -41,7 +41,7 @@ ggplot(data, aes(x=as.integer(user_verified), fill=fake)) +
     legend.title = element_blank(),
     legend.justification = c('left', 'top')
   )
-ggsave("plots/1_user_verified.png")
+ggsave("r_plots/1_user_verified.png")
 
 #ggplot(data, aes(x=user_verified, fill=fake)) +
 #  geom_bar() +
@@ -68,7 +68,7 @@ ggplot(data, aes(x=log10(retweet_count), fill=fake, colour=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/2_retweet_count.png")
+ggsave("r_plots/2_retweet_count.png")
 
 # distribution of fake news by number of friends
 ggplot(data, aes(x=log10(user_friends_count), fill=fake, colour=fake)) +
@@ -82,7 +82,7 @@ ggplot(data, aes(x=log10(user_friends_count), fill=fake, colour=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/3_friends_count.png")
+ggsave("r_plots/3_friends_count.png")
 
 # distribution of fake news by number of followers
 ggplot(data, aes(x=log10(user_followers_count), fill=fake, colour=fake)) +
@@ -96,7 +96,7 @@ ggplot(data, aes(x=log10(user_followers_count), fill=fake, colour=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/4_followers_count.png")
+ggsave("r_plots/4_followers_count.png")
 
 # distribution of fake news by number of favourites
 ggplot(data, aes(x=log10(user_favourites_count), fill=fake, colour=fake)) +
@@ -110,7 +110,7 @@ ggplot(data, aes(x=log10(user_favourites_count), fill=fake, colour=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/5_favourites_count.png")
+ggsave("r_plots/5_favourites_count.png")
 
 # distribution of fake news by number of hashtags
 ggplot(data, aes(x=num_hashtags, fill=fake, colour=fake)) +
@@ -126,7 +126,7 @@ ggplot(data, aes(x=num_hashtags, fill=fake, colour=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/6_num_hashtags.png")
+ggsave("r_plots/6_num_hashtags.png")
 
 # distribution of fake news by number of mentions
 ggplot(data, aes(x=num_mentions, fill=fake, colour=fake)) +
@@ -141,7 +141,7 @@ ggplot(data, aes(x=num_mentions, fill=fake, colour=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/7_num_mentions.png")
+ggsave("r_plots/7_num_mentions.png")
 
 # distribution of fake news by number of urls
 ggplot(data, aes(x=num_urls, fill=fake, colour=fake)) +
@@ -156,7 +156,7 @@ ggplot(data, aes(x=num_urls, fill=fake, colour=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/8_num_urls.png")
+ggsave("r_plots/8_num_urls.png")
 
 # distribution of fake news by number of media
 ggplot(data, aes(x=num_media, fill=fake)) +
@@ -171,7 +171,7 @@ ggplot(data, aes(x=num_media, fill=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/9_num_media.png")
+ggsave("r_plots/9_num_media.png")
 
 
 
@@ -203,7 +203,7 @@ ggplot(data, aes(x=number_of_digits(user_screen_name), fill=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/10_username_number_of_digits.png")
+ggsave("r_plots/10_username_number_of_digits.png")
 
 
 
@@ -219,7 +219,7 @@ ggplot(data, aes(x=str_count(user_screen_name, '_'), fill=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/11_username_number_of_underscores.png")
+ggsave("r_plots/11_username_number_of_underscores.png")
 
 
 
@@ -234,7 +234,7 @@ ggplot(data, aes(x=str_count(user_screen_name, '[A-Z]'), fill=fake)) +
     legend.title = element_blank(),
     legend.justification = c('right', 'top')
   )
-ggsave("plots/12_username_number_of_caps.png")
+ggsave("r_plots/12_username_number_of_caps.png")
 
 
 
