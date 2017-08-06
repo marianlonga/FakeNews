@@ -1,35 +1,26 @@
 # (c) 2017 Marian Longa
+# v5: add more derived features
 
-#TODO: change histogram to bar chart
-#TODO: choose the features for discrete and continuous plotting more wisely and more of them
-
-import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
-from scipy import stats
-import seaborn as sns
+import matplotlib.pyplot as plt
+from patsy import dmatrices
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn import metrics
+from sklearn.utils import resample
 import re
 import datetime
 
-sns.set(color_codes=True)
-
-INPUT_FILE_NAME      = 'dataset_new_combined_20170804.tsv'
-PLOTS_PATH           = 'plots/'
-STATISTICS_FILE_NAME = 'statistics.txt'
-DO_DISCRETE_PLOTS    = False
-DO_CONTINUOUS_PLOTS  = False
-DO_STATISTICS        = True
-
-# read csv file
-data = pd.read_csv(INPUT_FILE_NAME, sep='\t')
-data = data.dropna(subset=['is_fake_news_2'])
-data = data[data['is_fake_news_2'] != 'UNKNOWN']
-data['fake'] = (data['is_fake_news_2'] == 'TRUE').astype(int)
+# import data from TSV file
+data = pd.read_csv('dataset_new_combined_20170804.tsv', sep='\t')
+data = data.dropna(subset = ['is_fake_news_2'])
+data = data.drop(data[data.is_fake_news_2 == 'UNKNOWN'].index)
+data['fake'] = (data.is_fake_news_2 == 'TRUE').astype(int) # <-- NB changed FALSE to TRUE in this version ==> positive correlation corresponds to fake news not real news!
 data['user_verified'] = data['user_verified'].astype(int)
-data['num_urls'] = data['num_urls'].astype(int)
-
 
 # add derived features related to various base features
+
 
 # derived feature functions
 def number_of_swears(text):
@@ -143,91 +134,93 @@ data['user_profile_use_background_image'] = data['user_profile_use_background_im
 data['user_default_profile_image'] = data['user_default_profile_image'].astype(int)
 
 
-# divide data set into fake and other news
-data_fake = data[data['fake'] == 1]
-data_other = data[data['fake'] == 0]
+# select relevant features based on their quality (see 'features to use'.docx file)
+features_basic_all = \
+    'fake ~ retweet_count + user_verified + user_friends_count + user_followers_count + user_favourites_count + ' \
+    'num_hashtags + num_mentions + num_urls + num_media'
+features_basic_some = \
+    'fake ~ user_verified + user_friends_count + user_followers_count + num_urls + num_media'
+features_basic_few = \
+    'fake ~ user_verified + user_followers_count + num_urls'
+features_extended_few_single = \
+    'fake ~ user_verified + text_num_caps_digits + user_screen_name_has_caps_digits + num_urls_is_nonzero + ' \
+    'user_description_num_exclam + user_followers_count_per_day + user_listed_count_per_day + user_followers_count + ' \
+    'user_statuses_count_per_day + user_description_num_caps + user_favourites_count_per_day + ' \
+    'user_name_has_weird_chars + user_default_profile'
+features_extended_few_multiple = \
+    'fake ~ user_verified + text_num_caps + text_num_digits + user_screen_name_has_caps + user_screen_name_has_digits + num_urls_is_nonzero + ' \
+    'user_description_num_exclam + user_followers_count_per_day + user_listed_count_per_day + user_followers_count + ' \
+    'user_statuses_count_per_day + user_description_num_caps + user_favourites_count_per_day + ' \
+    'user_name_has_weird_chars + user_default_profile'
+features_extended_some_single = \
+    'fake ~ user_verified + text_num_caps_digits + user_screen_name_has_caps_digits + num_urls_is_nonzero + ' \
+    'user_description_num_exclam + user_followers_count_per_day + user_listed_count_per_day + user_followers_count + ' \
+    'user_statuses_count_per_day + user_description_num_caps + user_favourites_count_per_day + ' \
+    'user_name_has_weird_chars + user_default_profile + ' \
+    'created_at_weekday_sun_mon_tue + created_at_hour_13_to_22 + user_friends_count_per_day + num_media + ' \
+    'created_at_hour_23_to_5 + text_num_swears + user_profile_use_background_image + created_at_weekday + ' \
+    'user_listed_count + created_at_hour + user_friends_count + user_created_at_delta + user_statuses_count'
+features_extended_some_single_without_biasing_features = \
+    'fake ~ user_verified + text_num_caps_digits + user_screen_name_has_caps_digits + num_urls_is_nonzero + ' \
+    'user_description_num_exclam + user_followers_count_per_day + user_listed_count_per_day + user_followers_count + ' \
+    'user_statuses_count_per_day + user_description_num_caps + user_favourites_count_per_day + ' \
+    'user_name_has_weird_chars + user_default_profile + ' \
+    'created_at_weekday_sun_mon_tue + user_friends_count_per_day + num_media + ' \
+    'user_profile_use_background_image + created_at_weekday + ' \
+    'user_listed_count + created_at_hour + user_friends_count + user_created_at_delta + user_statuses_count'
+features_extended_some_multiple = \
+    'fake ~ user_verified + text_num_caps + text_num_digits + user_screen_name_has_caps + user_screen_name_has_digits + num_urls_is_nonzero + ' \
+    'user_description_num_exclam + user_followers_count_per_day + user_listed_count_per_day + user_followers_count + ' \
+    'user_statuses_count_per_day + user_description_num_caps + user_favourites_count_per_day + ' \
+    'user_name_has_weird_chars + user_default_profile + ' \
+    'created_at_weekday_sun_mon_tue + created_at_hour_13_to_22 + user_friends_count_per_day + num_media + ' \
+    'created_at_hour_23_to_5 + text_num_swears + user_profile_use_background_image + created_at_weekday + ' \
+    'user_listed_count + created_at_hour + user_friends_count + user_created_at_delta + user_statuses_count'
+features_extended_some_multiple_without_biasing_features = \
+    'fake ~ user_verified + text_num_caps + text_num_digits + user_screen_name_has_caps + user_screen_name_has_digits + num_urls_is_nonzero + ' \
+    'user_description_num_exclam + user_followers_count_per_day + user_listed_count_per_day + user_followers_count + ' \
+    'user_statuses_count_per_day + user_description_num_caps + user_favourites_count_per_day + ' \
+    'user_name_has_weird_chars + user_default_profile + ' \
+    'created_at_weekday_sun_mon_tue + user_friends_count_per_day + num_media + ' \
+    'user_profile_use_background_image + created_at_weekday + ' \
+    'user_listed_count + created_at_hour + user_friends_count + user_created_at_delta + user_statuses_count'
+features = features_extended_some_multiple_without_biasing_features
+y, X = dmatrices(features, data, return_type='dataframe')
 
-# plot continuous features
-if DO_CONTINUOUS_PLOTS:
-    continuous_features = ['retweet_count', 'user_friends_count', 'user_followers_count',
-                           'user_favourites_count', 'user_listed_count', 'user_statuses_count', 'user_created_at_delta',
-                           'user_statuses_count_per_day']
-    for feature in continuous_features:
-        fig, ax = plt.subplots()
-        sns.kdeplot(np.log10(data_fake[feature][data_fake[feature] != 0]), shade=True, ax=ax)
-        sns.kdeplot(np.log10(data_other[feature][data_other[feature] != 0]), shade=True, ax=ax)
-        plt.savefig(PLOTS_PATH + feature + '.png')
-        plt.close()
-    print("Continuous features plotted successfully")
+#split data into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=0)
+data_train = pd.concat([y_train, X_train], axis=1)
 
-# plot discrete features
-if DO_DISCRETE_PLOTS:
-    discrete_features = ['user_verified', 'geo_coordinates', 'num_hashtags', 'num_mentions',
-                         'num_urls', 'num_media',
-                         'created_at_hour', 'created_at_hour_23_to_5', 'created_at_hour_13_to_22', 'created_at_weekday',
-                         'created_at_weekday_sun_mon_tue', 'user_default_profile_image',
-                         'user_name_has_digits_underscores', 'user_profile_use_background_image', 'user_default_profile',
-                         'user_name_has_weird_chars', 'user_name_num_weird_chars', 'user_name_has_nonprintable_chars',
-                         'user_name_num_nonprintable_chars', 'user_name_num_caps']
-    weights_fake = np.ones(data_fake.shape[0])/len(data_fake)
-    weights_other = np.ones(data_other.shape[0])/len(data_other)
-    weights = [weights_fake, weights_other]
-    colors = ['red', 'green']
-    for feature in discrete_features:
-        plt.figure(figsize=(10, 5))
-        plt.hist([np.ravel(data_fake[feature]), np.ravel(data_other[feature])], weights=weights, color=colors, bins=len(np.unique(data[feature])))
-        plt.xlabel(feature)
-        plt.ylabel("normalised density of tweets")
-        plt.title("Distribution of tweets by feature '" + feature + "'")
-        plt.savefig(PLOTS_PATH + feature + '.png')
-        plt.close()
-    print("Discrete features plotted successfully")
+# in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
+data_train_real = data_train[data_train.fake == 0] #print "data_real shape: ", data_real.shape[0]
+data_train_fake = data_train[data_train.fake == 1] #print "data_fake shape: ", data_fake.shape[0]
+data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
+data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
+y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+X_train, y_train = X_train_upsampled, y_train_upsampled
 
-# calculate statistics
-if DO_STATISTICS:
-    statistics_features = [
-        'tweet_id', 'retweet_count', 'user_verified', 'user_friends_count', 'user_followers_count',
-        'user_favourites_count', 'geo_coordinates', 'num_hashtags', 'num_mentions', 'num_urls',
-        'num_media', 'num_media_is_nonzero',
-        'text_num_caps', 'text_num_digits', 'text_num_nonstandard', 'text_num_nonstandard_extended',
-        'text_num_exclam', 'text_num_caps_exclam', 'text_num_caps_digits', 'text_num_caps_digits_exclam',
-        'text_num_swears',
-        'num_urls_is_nonzero', 'num_hashtags_is_nonzero', 'num_mentions_is_more_than_2',
-        'created_at_hour', 'created_at_hour_23_to_5', 'created_at_hour_13_to_22', 'created_at_weekday', 'created_at_weekday_sun_mon_tue',
-        'user_description_num_caps', 'user_description_num_digits', 'user_description_num_nonstandard',
-        'user_description_num_nonstandard_extended', 'user_description_num_exclam',
-        'user_description_num_caps_with_num_nonstandard', 'user_description_num_non_a_to_z',
-        'user_description_num_non_a_to_z_non_digits', 'user_description_num_caps_exclam',
-        'user_default_profile_image',
-        'user_listed_count',
-        'user_profile_use_background_image', 'user_default_profile',
-        'user_screen_name_has_caps', 'user_screen_name_has_digits', 'user_screen_name_has_underscores',
-        'user_screen_name_has_caps_digits', 'user_screen_name_has_caps_underscores', 'user_screen_name_has_digits_underscores',
-        'user_screen_name_has_caps_digits_underscores', 'user_screen_name_num_caps', 'user_screen_name_num_digits',
-        'user_screen_name_num_underscores', 'user_screen_name_num_caps_digits', 'user_screen_name_num_caps_underscores',
-        'user_screen_name_num_digits_underscores', 'user_screen_name_num_caps_digits_underscores',
-        'user_screen_name_has_weird_chars', 'user_screen_name_num_weird_chars',
-        'user_name_has_caps', 'user_name_has_digits', 'user_name_has_underscores', 'user_name_has_caps_digits',
-        'user_name_has_caps_underscores', 'user_name_has_digits_underscores', 'user_name_has_caps_digits_underscores',
-        'user_name_num_caps', 'user_name_num_digits', 'user_name_num_underscores', 'user_name_num_caps_digits',
-        'user_name_num_caps_underscores', 'user_name_num_digits_underscores', 'user_name_num_caps_digits_underscores',
-        'user_name_has_weird_chars', 'user_name_num_weird_chars', 'user_name_has_nonprintable_chars',
-        'user_name_num_nonprintable_chars',
-        'user_statuses_count', 'user_created_at_delta', 'user_statuses_count_per_day', 'user_followers_count_per_day',
-        'user_listed_count_per_day', 'user_friends_count_per_day', 'user_favourites_count_per_day', 'retweet_count_per_day'
-    ]
-    statistics = []
-    for feature in statistics_features:
-        t, p = stats.ttest_ind(data_fake[feature].values, data_other[feature].values)
-        statistics.append([feature, format(float(t), '+.20f'), format(p, '.20f')])
-    statistics_sorted = sorted(statistics, key=lambda s: s[2])
+# ravel y sets
+y_test = np.ravel(y_test)
+y_train = np.ravel(y_train)
 
-    # print statistics
-    statistics_file = open(STATISTICS_FILE_NAME, 'w')
-    template = '{0:60} {1:30} {2:30}'
-    statistics_file.write(template.format("FEATURE", "T VALUE", "P VALUE"))
-    statistics_file.write("\n")
-    for statistic in statistics_sorted:
-        statistics_file.write(template.format(*statistic) + "\n")
-    statistics_file.close()
-    print("Statistics written successfully")
+# fit model
+model = LogisticRegression(C=1e10, solver='newton-cg', max_iter=10000) #newton-cg is the only solver which seems to work with this data set
+model.fit(X_train, y_train)
+
+# print statistics
+print("model score (binary): %f" % metrics.accuracy_score(y_test, model.predict(X_test)))
+print("model score (probabilistic): %f" % metrics.roc_auc_score(y_test, model.predict_proba(X_test)[:,1]))
+print("mean fake news percentage in test set: %f" % y_test.mean())
+print(metrics.confusion_matrix(y_test, model.predict(X_test)))
+print(metrics.classification_report(y_test, model.predict(X_test)))
+
+# print coefficients
+formatted_coeffs = ['{:+0.15f}'.format(coeff) for coeff in (model.coef_)[0]]
+weights_list = [X_train.columns.tolist(), np.transpose(formatted_coeffs).tolist()]
+weights_list = map(list, zip(*weights_list))
+weights_list_sorted = sorted(weights_list, key=lambda column: abs(float(column[1])), reverse=True)
+template = '{0:40} {1:30}'
+print(template.format("FEATURE", "WEIGHT"))
+for row in weights_list_sorted:
+    print(template.format(*row))
+    #print(row[0] + ":\t" + row[1])
