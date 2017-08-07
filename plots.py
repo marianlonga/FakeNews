@@ -17,8 +17,8 @@ INPUT_FILE_NAME      = 'dataset_new_combined_20170804.tsv'
 PLOTS_PATH           = 'plots/'
 STATISTICS_FILE_NAME = 'statistics.txt'
 DO_DISCRETE_PLOTS    = False
-DO_CONTINUOUS_PLOTS  = False
-DO_STATISTICS        = True
+DO_CONTINUOUS_PLOTS  = True
+DO_STATISTICS        = False
 
 # read csv file
 data = pd.read_csv(INPUT_FILE_NAME, sep='\t')
@@ -149,13 +149,20 @@ data_other = data[data['fake'] == 0]
 
 # plot continuous features
 if DO_CONTINUOUS_PLOTS:
-    continuous_features = ['retweet_count', 'user_friends_count', 'user_followers_count',
-                           'user_favourites_count', 'user_listed_count', 'user_statuses_count', 'user_created_at_delta',
-                           'user_statuses_count_per_day']
+    continuous_features = [
+        'retweet_count', 'user_friends_count', 'user_followers_count',
+        'user_favourites_count', 'user_listed_count', 'user_statuses_count', 'user_created_at_delta',
+        'user_statuses_count_per_day',
+        'user_created_at_delta', 'created_at_delta', 'user_statuses_count_per_day', 'user_followers_count_per_day',
+        'user_listed_count_per_day', 'user_friends_count_per_day', 'user_favourites_count_per_day',
+        'retweet_count_per_day']
     for feature in continuous_features:
         fig, ax = plt.subplots()
-        sns.kdeplot(np.log10(data_fake[feature][data_fake[feature] != 0]), shade=True, ax=ax)
-        sns.kdeplot(np.log10(data_other[feature][data_other[feature] != 0]), shade=True, ax=ax)
+        sns.kdeplot(np.log10(data_fake[feature][data_fake[feature] != 0]), shade=True, ax=ax, color='r', legend=False)
+        sns.kdeplot(np.log10(data_other[feature][data_other[feature] != 0]), shade=True, ax=ax, color='g', legend=False)
+        plt.title("Distribution of tweets by feature '" + feature + "'")
+        plt.xlabel(feature)
+        plt.ylabel("normalised density of tweets")
         plt.savefig(PLOTS_PATH + feature + '.png')
         plt.close()
     print("Continuous features plotted successfully")
