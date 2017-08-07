@@ -16,9 +16,9 @@ sns.set(color_codes=True)
 INPUT_FILE_NAME      = 'dataset_new_combined_20170804.tsv'
 PLOTS_PATH           = 'plots/'
 STATISTICS_FILE_NAME = 'statistics.txt'
-DO_DISCRETE_PLOTS    = False
+DO_DISCRETE_PLOTS    = True
 DO_CONTINUOUS_PLOTS  = True
-DO_STATISTICS        = False
+DO_STATISTICS        = True
 
 # read csv file
 data = pd.read_csv(INPUT_FILE_NAME, sep='\t')
@@ -38,19 +38,28 @@ def number_of_swears(text):
     for swearword in swearwords:
         number += len(re.findall(swearword, text.lower()))
     return number
-def extract_weekday_number(text):
+def get_weekday_number_from_text(text):
     weekdays = {'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7}
-    weekday = re.search('^([A-Z][a-z][a-z])\s', text).group(1)
-    return weekdays[weekday]
+    weekday_text = re.search('^([A-Z][a-z][a-z])\s', text).group(1)
+    weekday_number = weekdays[weekday_text]
+    utc_hour = int(re.search('\s([0-9][0-9]):', text).group(1))
+    if utc_hour - 5 < 0: # although in the UK the day number is 'weekday_number', in the US the day number might be one less due to timezone shift
+        weekday_number -= 1
+    if weekday_number == 0:
+        weekday_number = 7
+    return weekday_number
 def get_time_delta(datetime_created_string):
     datetime_today = datetime.datetime.now()
     datetime_created = datetime.datetime.strptime(datetime_created_string, "%a %b %d %H:%M:%S +0000 %Y")
     datetime_delta = datetime_today - datetime_created
     return datetime_delta.days
-#def get_user_screen_name_num_caps_digits_except_first_cap(text):
-#    return len(re.findall('[A-Z0-9]', text)) - len(re.findall('^[A-Z]', text))
-#def get_user_screen_name_has_caps_digits_except_first_cap(text):
-#    return (len(re.findall('[A-Z0-9]', text)) - len(re.findall('^[A-Z]', text))) >= 1
+def get_est_hour_from_text(text):
+    utc_hour = int(re.search('\s([0-9][0-9]):', text).group(1))
+    est_hour = (utc_hour + 24 - 5) % 24
+    return est_hour
+def get_hour_of_week_from_text(text):
+    hour_of_week = (get_weekday_number_from_text(text) - 1) * 24 + get_est_hour_from_text(text)
+    return hour_of_week
 
 # 'user_screen_name' related features
 data['user_screen_name_has_caps'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z]', text)) >= 1))
@@ -67,8 +76,6 @@ data['user_screen_name_num_caps_digits'] = data['user_screen_name'].apply(lambda
 data['user_screen_name_num_caps_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z_]', text)))
 data['user_screen_name_num_digits_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[0-9_]', text)) )
 data['user_screen_name_num_caps_digits_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z0-9_]', text)))
-#data['user_screen_name_has_caps_digits_except_first_cap'] = data['user_screen_name'].apply(get_user_screen_name_has_caps_digits_except_first_cap)
-#data['user_screen_name_num_caps_digits_except_first_cap'] = data['user_screen_name'].apply(get_user_screen_name_num_caps_digits_except_first_cap)
 data['user_screen_name_has_weird_chars'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[^A-Za-z .\']', text)) >= 1))
 data['user_screen_name_num_weird_chars'] = data['user_screen_name'].apply(lambda text: len(re.findall('[^A-Za-z .\']', text)))
 
@@ -84,11 +91,12 @@ data['text_num_caps_digits_exclam'] = data['text'].apply(lambda text: len(re.fin
 data['text_num_swears'] = data['text'].apply(number_of_swears)
 
 # 'created_at' related features
-data['created_at_hour'] = data['created_at'].apply(lambda text: int(re.search('\s([0-9][0-9]):', text).group(1)))
-data['created_at_hour_23_to_5'] = data['created_at_hour'].isin([23, 0, 1, 2, 3, 4, 5]).astype(int)
-data['created_at_hour_13_to_22'] = data['created_at_hour'].isin(range(13, 23)).astype(int)
-data['created_at_weekday'] = data['created_at'].apply(extract_weekday_number)
+data['created_at_hour'] = data['created_at'].apply(get_est_hour_from_text)
+data['created_at_hour_18_to_00'] = data['created_at_hour'].isin([18, 19, 20, 21, 22, 23, 0]).astype(int)
+data['created_at_hour_08_to_17'] = data['created_at_hour'].isin(range(8, 17)).astype(int)
+data['created_at_weekday'] = data['created_at'].apply(get_weekday_number_from_text)
 data['created_at_weekday_sun_mon_tue'] = data['created_at_weekday'].isin([7, 1, 2]).astype(int)
+data['created_at_hour_of_week'] = data['created_at'].apply(get_hour_of_week_from_text)
 
 # 'user_description' related features
 data['user_description_num_caps'] = data['user_description'].apply(lambda text: len(re.findall('[A-Z]', text)))
@@ -169,13 +177,15 @@ if DO_CONTINUOUS_PLOTS:
 
 # plot discrete features
 if DO_DISCRETE_PLOTS:
-    discrete_features = ['user_verified', 'geo_coordinates', 'num_hashtags', 'num_mentions',
-                         'num_urls', 'num_media',
-                         'created_at_hour', 'created_at_hour_23_to_5', 'created_at_hour_13_to_22', 'created_at_weekday',
-                         'created_at_weekday_sun_mon_tue', 'user_default_profile_image',
-                         'user_name_has_digits_underscores', 'user_profile_use_background_image', 'user_default_profile',
-                         'user_name_has_weird_chars', 'user_name_num_weird_chars', 'user_name_has_nonprintable_chars',
-                         'user_name_num_nonprintable_chars', 'user_name_num_caps']
+    discrete_features = [
+        'user_verified', 'geo_coordinates', 'num_hashtags', 'num_mentions',
+        'num_urls', 'num_media',
+        'created_at_hour', 'created_at_hour_08_to_17', 'created_at_hour_18_to_00', 'created_at_weekday',
+        'created_at_weekday_sun_mon_tue', 'created_at_hour_of_week', 'user_default_profile_image',
+        'user_name_has_digits_underscores', 'user_profile_use_background_image', 'user_default_profile',
+        'user_name_has_weird_chars', 'user_name_num_weird_chars', 'user_name_has_nonprintable_chars',
+        'user_name_num_nonprintable_chars', 'user_name_num_caps'
+    ]
     weights_fake = np.ones(data_fake.shape[0])/len(data_fake)
     weights_other = np.ones(data_other.shape[0])/len(data_other)
     weights = [weights_fake, weights_other]
@@ -200,7 +210,8 @@ if DO_STATISTICS:
         'text_num_exclam', 'text_num_caps_exclam', 'text_num_caps_digits', 'text_num_caps_digits_exclam',
         'text_num_swears',
         'num_urls_is_nonzero', 'num_hashtags_is_nonzero', 'num_mentions_is_more_than_2',
-        'created_at_hour', 'created_at_hour_23_to_5', 'created_at_hour_13_to_22', 'created_at_weekday', 'created_at_weekday_sun_mon_tue',
+        'created_at_hour', 'created_at_hour_08_to_17', 'created_at_hour_18_to_00', 'created_at_weekday', 'created_at_weekday_sun_mon_tue',
+        'created_at_hour_of_week',
         'user_description_num_caps', 'user_description_num_digits', 'user_description_num_nonstandard',
         'user_description_num_nonstandard_extended', 'user_description_num_exclam',
         'user_description_num_caps_with_num_nonstandard', 'user_description_num_non_a_to_z',
