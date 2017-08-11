@@ -10,14 +10,17 @@ from scipy import stats
 import seaborn as sns
 import re
 import datetime
+import sys
 
 sns.set(color_codes=True)
 
-INPUT_FILE_NAME      = 'dataset_new_combined_20170804.tsv'
-PLOTS_PATH           = 'plots/'
-STATISTICS_FILE_NAME = 'statistics.txt'
-DO_DISCRETE_PLOTS    = True
-DO_CONTINUOUS_PLOTS  = True
+INPUT_FILE_NAME      = '/Users/longaster/Desktop/UROP2017/fakenews/marian/dataset_new_combined_20170804.tsv'
+PLOTS_PATH           = '/Users/longaster/Desktop/UROP2017/fakenews/marian/plots/'
+STATISTICS_TXT_FILE_NAME = '/Users/longaster/Desktop/UROP2017/fakenews/marian/statistics.txt'
+STATISTICS_CSV_FILE_NAME = '/Users/longaster/Desktop/UROP2017/fakenews/marian/statistics.csv'
+STATISTICS_COND_FILE_NAME = '/Users/longaster/Desktop/UROP2017/fakenews/marian/statistics_condensed.txt'
+DO_DISCRETE_PLOTS    = False
+DO_CONTINUOUS_PLOTS  = False
 DO_STATISTICS        = True
 
 # read csv file
@@ -169,7 +172,7 @@ if DO_CONTINUOUS_PLOTS:
         sns.kdeplot(np.log10(data_fake[feature][data_fake[feature] != 0]), shade=True, ax=ax, color='r', legend=False)
         sns.kdeplot(np.log10(data_other[feature][data_other[feature] != 0]), shade=True, ax=ax, color='g', legend=False)
         plt.title("Distribution of tweets by feature '" + feature + "'")
-        plt.xlabel(feature)
+        plt.xlabel("log10(" + feature + ")")
         plt.ylabel("normalised density of tweets")
         plt.savefig(PLOTS_PATH + feature + '.png')
         plt.close()
@@ -236,16 +239,41 @@ if DO_STATISTICS:
     ]
     statistics = []
     for feature in statistics_features:
-        t, p = stats.ttest_ind(data_fake[feature].values, data_other[feature].values)
-        statistics.append([feature, format(float(t), '+.20f'), format(p, '.20f')])
+        t_value, p_value = stats.ttest_ind(data_fake[feature].values, data_other[feature].values)
+        diff_mean_value = data_fake[feature].mean() - data_other[feature].mean()
+        diff_mean_percentage = diff_mean_value / data[feature].mean()
+        #statistics.append([feature, format(float(t_value), '+.20f'), format(p_value, '.20f'), format(diff_mean_value, '+30.15f'), format(diff_mean_percentage, '+.20f')])
+        statistics.append([feature, float(t_value), p_value, diff_mean_value, diff_mean_percentage])
     statistics_sorted = sorted(statistics, key=lambda s: s[2])
 
-    # print statistics
-    statistics_file = open(STATISTICS_FILE_NAME, 'w')
-    template = '{0:60} {1:30} {2:30}'
-    statistics_file.write(template.format("FEATURE", "T VALUE", "P VALUE"))
-    statistics_file.write("\n")
+    # print statistics into TXT file
+    statistics_txt_file = open(STATISTICS_TXT_FILE_NAME, 'w')
+    template = '{0:60} {1:30} {2:30} {3:30} {4:30}'
+    statistics_txt_file.write(template.format("FEATURE", "T VALUE", "P VALUE", "DIFF MEAN VALUE", "DIFF MEAN PERCENTAGE"))
+    statistics_txt_file.write("\n")
     for statistic in statistics_sorted:
-        statistics_file.write(template.format(*statistic) + "\n")
-    statistics_file.close()
+        statistic_formatted = [statistic[0], format(statistic[1], '+.20f'), format(statistic[2], '.20f'), format(statistic[3], '+30.10f'), format(statistic[4], '+.20f')]
+        statistics_txt_file.write(template.format(*statistic_formatted) + "\n")
+    statistics_txt_file.close()
+
+    # print statistics into CSV file
+    statistics_csv_file = open(STATISTICS_CSV_FILE_NAME, 'w')
+    #statistics_csv_file.write("FEATURE,T VALUE,P VALUE,DIFF MEAN VALUE,DIFF MEAN PERCENTAGE\n")
+    statistics_csv_file.write("FEATURE,DIFF MEAN VALUE,DIFF MEAN PERCENTAGE,P VALUE\n")
+    for statistic in statistics_sorted:
+        #statistic_formatted = statistic[0] + "," + format(statistic[1], '+.20f') + "," + format(statistic[2], '.20f') + "," + format(statistic[3], '+.20f') + "," + format(statistic[4], '+.20f')
+        statistic_formatted = statistic[0] + "," + format(statistic[3], '+25.5f') + "," + format(statistic[4]*100, '+.2f') + "," + format(statistic[2], '.20f')
+        statistics_csv_file.write(statistic_formatted + "\n")
+    statistics_csv_file.close()
+
+    # print condensed statistics into TXT file
+    statistics_cond_file = open(STATISTICS_COND_FILE_NAME, 'w')
+    template = '{0:55} {1:25} {2:10} {3:30}'
+    statistics_cond_file.write(template.format("FEATURE", "DIFF MEAN", "PERC", "P VALUE"))
+    statistics_cond_file.write("\n")
+    for statistic in statistics_sorted:
+        statistic_formatted = [statistic[0], format(statistic[3], '+25.5f'), "(" + format(statistic[4]*100, '+.2f') + "%)", format(statistic[2], '.20f')]
+        statistics_cond_file.write(template.format(*statistic_formatted) + "\n")
+    statistics_cond_file.close()
+
     print("Statistics written successfully")
