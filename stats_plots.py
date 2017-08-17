@@ -135,7 +135,7 @@ data['user_name_num_caps_digits_underscores'] = data['user_name'].apply(lambda t
 data['user_name_has_weird_chars'] = data['user_name'].apply(lambda text: int(len(re.findall('[^A-Za-z .\']', text)) >= 1))
 data['user_name_num_weird_chars'] = data['user_name'].apply(lambda text: len(re.findall('[^A-Za-z .\']', text)))
 data['user_name_has_nonprintable_chars'] = data['user_name'].apply(lambda text: int(len(re.findall('[^ -~]', text)) >= 1))
-data['user_name_num_nonprintable_chars'] = data['user_name'].apply(lambda text: len(re.findall('[^ -~]', text)) >= 1)
+data['user_name_num_nonprintable_chars'] = data['user_name'].apply(lambda text: len(re.findall('[^ -~]', text)))
 
 # nonzero number features
 data['num_urls_is_nonzero'] = data['num_urls'].apply(lambda number: int(number >= 1))
