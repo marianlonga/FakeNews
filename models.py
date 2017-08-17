@@ -1,26 +1,22 @@
 # (c) 2017 Marian Longa
 
 import pandas as pd
-import matplotlib.pyplot as plt
 from patsy import dmatrices
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn import svm
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import cross_val_score
 from sklearn import metrics
 from sklearn.utils import resample
 from sklearn.model_selection import StratifiedKFold
 import re
 import datetime
-import sys
+import csv
 
 
-MODEL_NAME          = 'svm'                                                     # choose 'logistic_regression', 'svm'
-FEATURES_TO_USE     = 'features_extended_some_multiple_without_text_num_swears' # default 'features_extended_some_multiple_without_text_num_swears'
-CV_NUMBER_OF_SPLITS = 5                                                         # number of splits for cross-validation, default = 5
-SVM_MAX_ITER        = 500                                                       # maximum number of iterations for SVM algorithm, default = 50000
-
+MODEL_NAME             = 'svm'                                                                # choose 'logistic_regression', 'svm'
+FEATURES_TO_USE        = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
+PERFORMANCES_FILE_NAME = 'performances.csv'                                                   # default 'performances.csv'
+CV_NUMBER_OF_SPLITS    = 5                                                                    # number of splits for cross-validation, default = 5
 
 # import data from TSV file
 data = pd.read_csv('dataset_new_combined_20170804.tsv', sep='\t')
@@ -279,7 +275,6 @@ features = {
 
 # choose feature set and model for the classifier
 features = features[FEATURES_TO_USE] #default: features_extended_some_multiple_without_text_num_swears
-#model_name = 'svm' # 'logistic_regression' / 'svm'
 
 y, X = dmatrices(features, data, return_type='dataframe')
 y_array, X_array = np.ravel(y.values), X.values
@@ -288,6 +283,10 @@ y_array, X_array = np.ravel(y.values), X.values
 cv = StratifiedKFold(n_splits=CV_NUMBER_OF_SPLITS, shuffle=True, random_state=123)
 accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports, weights_list = [], [], [], [], []
 
+# open file to write model performances into
+performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
+performances_writer = csv.writer(performances_file)
+
 if MODEL_NAME == 'logistic_regression':
     for train_index, test_index in cv.split(X_array, y_array):
         # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
@@ -295,8 +294,8 @@ if MODEL_NAME == 'logistic_regression':
         data_train = pd.concat([y_train, X_train], axis=1)
 
         # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
-        data_train_real = data_train[data_train.fake == 0]  # print "data_real shape: ", data_real.shape[0]
-        data_train_fake = data_train[data_train.fake == 1]  # print "data_fake shape: ", data_fake.shape[0]
+        data_train_real = data_train[data_train.fake == 0]
+        data_train_fake = data_train[data_train.fake == 1]
         data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
         data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
         y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
@@ -330,38 +329,54 @@ if MODEL_NAME == 'logistic_regression':
     print("mean feature weights: ", features_weights_sorted)
 
 if MODEL_NAME == 'svm':
-    for C in [(k * (10 ** exp)) for exp in range(-10, 10, 1) for k in [1, 5]]:
-        for train_index, test_index in cv.split(X_array, y_array):
-            # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
-            X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index, :], y.iloc[test_index, :]
-            data_train = pd.concat([y_train, X_train], axis=1)
+    #performances_file.write("model,kernel,max_iter,C,mean_accuracy_score,mean_roc_auc_score,mean_confusion_matrix\n") # write header to performances file
+    performances_writer.writerow(["model","kernel","max_iter","C","mean_accuracy_score","mean_roc_auc_score","mean_confusion_matrix"])  # write header to performances file
+    for SVM_KERNEL in ['linear', 'poly', 'rbf', 'sigmoid']:
+        for SVM_MAX_ITER in [10, 100, 1000, 5000, 10000, 50000, 100000]:
+            for C in [(k * (10 ** exp)) for exp in range(-10, 16, 1) for k in [1, 5]]:
+                for train_index, test_index in cv.split(X_array, y_array):
+                    # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
+                    X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index, :], y.iloc[test_index, :]
+                    data_train = pd.concat([y_train, X_train], axis=1)
 
-            # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
-            data_train_real = data_train[data_train.fake == 0]  # print "data_real shape: ", data_real.shape[0]
-            data_train_fake = data_train[data_train.fake == 1]  # print "data_fake shape: ", data_fake.shape[0]
-            data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
-            data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
-            y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+                    # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
+                    data_train_real = data_train[data_train.fake == 0]
+                    data_train_fake = data_train[data_train.fake == 1]
+                    data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
+                    data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
+                    y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
 
-            # convert pandas dataframes into numpy arrays
-            y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
-            y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+                    # convert pandas dataframes into numpy arrays
+                    y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
+                    y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
 
-            # fit model
-            # model = svm.SVC(C=C, kernel='rbf', probability=True, verbose=True)
-            model = svm.SVC(C=C, kernel='linear', probability=True, verbose=False, max_iter=SVM_MAX_ITER)
-            model.fit(X_train_upsampled_array, y_train_upsampled_array)
+                    # fit model
+                    # model = svm.SVC(C=C, kernel='rbf', probability=True, verbose=True)
+                    model = svm.SVC(C=C, kernel=SVM_KERNEL, probability=True, verbose=False, max_iter=SVM_MAX_ITER)
+                    model.fit(X_train_upsampled_array, y_train_upsampled_array)
 
-            # calculate statistics for one fold
-            accuracy_scores.append(metrics.accuracy_score(y_test_array, model.predict(X_test_array)))
-            roc_auc_scores.append(metrics.roc_auc_score(y_test_array, model.predict_proba(X_test_array)[:, 1]))
-            confusion_matrices.append(metrics.confusion_matrix(y_test_array, model.predict(X_test_array)))
-            classification_reports.append(metrics.classification_report(y_test, model.predict(X_test)))
+                    # calculate performances for one fold
+                    accuracy_scores.append(metrics.accuracy_score(y_test_array, model.predict(X_test_array)))
+                    roc_auc_scores.append(metrics.roc_auc_score(y_test_array, model.predict_proba(X_test_array)[:, 1]))
+                    confusion_matrices.append(metrics.confusion_matrix(y_test_array, model.predict(X_test_array)))
+                    classification_reports.append(metrics.classification_report(y_test, model.predict(X_test)))
 
-        # print statistics averaged over all folds
-        print("C                   = %.0g" % C)
-        print("mean accuracy score = %.10f" % np.mean(accuracy_scores))
-        print("mean roc auc score: = %.10f" % np.mean(roc_auc_scores))
-        print(np.mean(confusion_matrices, axis=0))
-        print("")
+                # print averaged performances (from all folds) into CSV file
+                mean_accuracy_score = np.mean(accuracy_scores)
+                mean_roc_auc_score = np.mean(roc_auc_scores)
+                mean_confusion_matrix = np.mean(confusion_matrices, axis=0)
+                performances_writer.writerow(
+                    [MODEL_NAME, SVM_KERNEL, str(SVM_MAX_ITER), format(C, '.0E'), format(mean_accuracy_score, '0.10f'),
+                     format(mean_roc_auc_score, '0.10f'), str(np.around(mean_confusion_matrix, 1).tolist())]
+                )
+
+                # print progress
+                print(
+                    datetime.datetime.now().time().strftime("%H:%M:%S.%f")[:-3] + "\t" + MODEL_NAME + "\t" + SVM_KERNEL + "\t" + str(SVM_MAX_ITER) + "\t" +
+                    format(C, '.0E') + "\t" + format(mean_accuracy_score, '0.5f') + "\t" + format(mean_roc_auc_score, '0.5f') + "\t" +
+                    str(np.around(mean_confusion_matrix, 0).tolist())
+                )
+
+# close file into which the model performances have been written
+performances_file.close()
 
