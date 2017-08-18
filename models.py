@@ -8,148 +8,24 @@ from sklearn import svm
 from sklearn import metrics
 from sklearn.utils import resample
 from sklearn.model_selection import StratifiedKFold
+from sklearn.exceptions import ConvergenceWarning
 import re
 import datetime
 import csv
+import multiprocessing as mp
+import warnings
 
+MODEL_NAME              = 'svm'                                                                # choose 'logistic_regression', 'svm'
+FEATURES_TO_USE         = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
+PERFORMANCES_FILE_NAME  = 'performances.csv'                                                   # default 'performances.csv'
+CV_NUMBER_OF_SPLITS     = 5                                                                    # number of splits for cross-validation, default = 5
+SVM_NUMBER_OF_PROCESSES = 4                                                                    # number of processes to use for parallel computing in SVM, default 4 (use the number of CPU cores of current machine)
+SVM_KERNEL_LIST         = ['linear']                                                           # SVM kernel list, default ['linear', 'poly', 'rbf', 'sigmoid']
+SVM_MAX_ITER_LIST       = [10, 100, 1000]                                                      # SVM max iter list, default [10, 100, 1000, 5000, 10000, 50000, 100000]
+SVM_C_LIST              = [(k * (10 ** exp)) for exp in range(-10, 11, 1) for k in [1, 5]]     # SVM C list, default [(k * (10 ** exp)) for exp in range(-10, 11, 1) for k in [1, 5]]
 
-MODEL_NAME             = 'svm'                                                                # choose 'logistic_regression', 'svm'
-FEATURES_TO_USE        = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
-PERFORMANCES_FILE_NAME = 'performances.csv'                                                   # default 'performances.csv'
-CV_NUMBER_OF_SPLITS    = 5                                                                    # number of splits for cross-validation, default = 5
-
-# import data from TSV file
-data = pd.read_csv('dataset_new_combined_20170804.tsv', sep='\t')
-data = data.dropna(subset = ['is_fake_news_2'])
-data = data.drop(data[data.is_fake_news_2 == 'UNKNOWN'].index)
-data['fake'] = (data.is_fake_news_2 == 'TRUE').astype(int) # <-- NB changed FALSE to TRUE in this version ==> positive correlation corresponds to fake news not real news!
-data['user_verified'] = data['user_verified'].astype(int)
-
-
-# add derived features related to various base features
-
-# derived feature functions
-def number_of_swears(text):
-    number = 0
-    swearwords = ['fuck', 'shit', 'dumb', 'retard', 'kill', 'crap']
-    for swearword in swearwords:
-        number += len(re.findall(swearword, text.lower()))
-    return number
-def get_weekday_number_from_text(text):
-    weekdays = {'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7}
-    weekday_text = re.search('^([A-Z][a-z][a-z])\s', text).group(1)
-    weekday_number = weekdays[weekday_text]
-    utc_hour = int(re.search('\s([0-9][0-9]):', text).group(1))
-    if utc_hour - 5 < 0: # although in the UK the day number is 'weekday_number', in the US the day number might be one less due to timezone shift
-        weekday_number -= 1
-    if weekday_number == 0:
-        weekday_number = 7
-    return weekday_number
-def get_time_delta(datetime_created_string):
-    datetime_today = datetime.datetime.now()
-    datetime_created = datetime.datetime.strptime(datetime_created_string, "%a %b %d %H:%M:%S +0000 %Y")
-    datetime_delta = datetime_today - datetime_created
-    return datetime_delta.days
-def get_est_hour_from_text(text):
-    utc_hour = int(re.search('\s([0-9][0-9]):', text).group(1))
-    est_hour = (utc_hour + 24 - 5) % 24
-    return est_hour
-def get_hour_of_week_from_text(text):
-    hour_of_week = (get_weekday_number_from_text(text) - 1) * 24 + get_est_hour_from_text(text)
-    return hour_of_week
-
-# 'user_screen_name' related features
-data['user_screen_name_has_caps'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z]', text)) >= 1))
-data['user_screen_name_has_digits'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[0-9]', text)) >= 1))
-data['user_screen_name_has_underscores'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[_]', text)) >= 1))
-data['user_screen_name_has_caps_digits'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z0-9]', text)) >= 1))
-data['user_screen_name_has_caps_underscores'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z_]', text)) >= 1))
-data['user_screen_name_has_digits_underscores'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[0-9_]', text)) >= 1))
-data['user_screen_name_has_caps_digits_underscores'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z0-9_]', text)) >= 1))
-data['user_screen_name_num_caps'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z]', text)))
-data['user_screen_name_num_digits'] = data['user_screen_name'].apply(lambda text: len(re.findall('[0-9]', text)))
-data['user_screen_name_num_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[_]', text)))
-data['user_screen_name_num_caps_digits'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z0-9]', text)))
-data['user_screen_name_num_caps_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z_]', text)))
-data['user_screen_name_num_digits_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[0-9_]', text)) )
-data['user_screen_name_num_caps_digits_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z0-9_]', text)))
-data['user_screen_name_has_weird_chars'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[^A-Za-z .\']', text)) >= 1))
-data['user_screen_name_num_weird_chars'] = data['user_screen_name'].apply(lambda text: len(re.findall('[^A-Za-z .\']', text)))
-
-# 'text' related features
-data['text_num_caps'] = data['text'].apply(lambda text: len(re.findall('[A-Z]', text)))
-data['text_num_digits'] = data['text'].apply(lambda text: len(re.findall('[0-9]', text)))
-data['text_num_nonstandard'] = data['text'].apply(lambda text: len(re.findall('[^A-Za-z0-9,.]', text)))
-data['text_num_nonstandard_extended'] = data['text'].apply(lambda text: len(re.findall('[^A-Za-z0-9,.?!\-@#\']', text)))
-data['text_num_exclam'] = data['text'].apply(lambda text: len(re.findall('[!]', text)))
-data['text_num_caps_exclam'] = data['text'].apply(lambda text: len(re.findall('[A-Z!]', text)))
-data['text_num_caps_digits'] = data['text'].apply(lambda text: len(re.findall('[A-Z0-9]', text)))
-data['text_num_caps_digits_exclam'] = data['text'].apply(lambda text: len(re.findall('[A-Z0-9!]', text)))
-data['text_num_swears'] = data['text'].apply(number_of_swears)
-
-# 'created_at' related features
-data['created_at_hour'] = data['created_at'].apply(get_est_hour_from_text)
-data['created_at_hour_18_to_00'] = data['created_at_hour'].isin([18, 19, 20, 21, 22, 23, 0]).astype(int)
-data['created_at_hour_08_to_17'] = data['created_at_hour'].isin(range(8, 17)).astype(int)
-data['created_at_weekday'] = data['created_at'].apply(get_weekday_number_from_text)
-data['created_at_weekday_sun_mon_tue'] = data['created_at_weekday'].isin([7, 1, 2]).astype(int)
-data['created_at_hour_of_week'] = data['created_at'].apply(get_hour_of_week_from_text)
-
-# 'user_description' related features
-data['user_description_num_caps'] = data['user_description'].apply(lambda text: len(re.findall('[A-Z]', text)))
-data['user_description_num_digits'] = data['user_description'].apply(lambda text: len(re.findall('[0-9]', text)))
-data['user_description_num_nonstandard'] = data['user_description'].apply(lambda text: len(re.findall('[^A-Za-z0-9,.]', text)))
-data['user_description_num_nonstandard_extended'] = data['user_description'].apply(lambda text: len(re.findall('[^A-Za-z0-9,.?!\-@#\']', text)))
-data['user_description_num_exclam'] = data['user_description'].apply(lambda text: len(re.findall('[!]', text)))
-data['user_description_num_caps_with_num_nonstandard'] = data['user_description'].apply(lambda text: len(re.findall('[^a-z0-9,.]', text)))
-data['user_description_num_non_a_to_z'] = data['user_description'].apply(lambda text: len(re.findall('[^a-z]', text)))
-data['user_description_num_non_a_to_z_non_digits'] = data['user_description'].apply(lambda text: len(re.findall('[^a-z0-9]', text)))
-data['user_description_num_caps_exclam'] = data['user_description'].apply(lambda text: len(re.findall('[A-Z!]', text)))
-
-# 'user_name' related features
-data['user_name_has_caps'] = data['user_name'].apply(lambda text: int(len(re.findall('[A-Z]', text)) >= 1))
-data['user_name_has_digits'] = data['user_name'].apply(lambda text: int(len(re.findall('[0-9]', text)) >= 1))
-data['user_name_has_underscores'] = data['user_name'].apply(lambda text: int(len(re.findall('[_]', text)) >= 1))
-data['user_name_has_caps_digits'] = data['user_name'].apply(lambda text: int(len(re.findall('[A-Z0-9]', text)) >= 1))
-data['user_name_has_caps_underscores'] = data['user_name'].apply(lambda text: int(len(re.findall('[A-Z_]', text)) >= 1))
-data['user_name_has_digits_underscores'] = data['user_name'].apply(lambda text: int(len(re.findall('[0-9_]', text)) >= 1))
-data['user_name_has_caps_digits_underscores'] = data['user_name'].apply(lambda text: int(len(re.findall('[A-Z0-9_]', text)) >= 1))
-data['user_name_num_caps'] = data['user_name'].apply(lambda text: len(re.findall('[A-Z]', text)))
-data['user_name_num_digits'] = data['user_name'].apply(lambda text: len(re.findall('[0-9]', text)))
-data['user_name_num_underscores'] = data['user_name'].apply(lambda text: len(re.findall('[_]', text)))
-data['user_name_num_caps_digits'] = data['user_name'].apply(lambda text: len(re.findall('[A-Z0-9]', text)))
-data['user_name_num_caps_underscores'] = data['user_name'].apply(lambda text: len(re.findall('[A-Z_]', text)))
-data['user_name_num_digits_underscores'] = data['user_name'].apply(lambda text: len(re.findall('[0-9_]', text)) )
-data['user_name_num_caps_digits_underscores'] = data['user_name'].apply(lambda text: len(re.findall('[A-Z0-9_]', text)))
-data['user_name_has_weird_chars'] = data['user_name'].apply(lambda text: int(len(re.findall('[^A-Za-z .\']', text)) >= 1))
-data['user_name_num_weird_chars'] = data['user_name'].apply(lambda text: len(re.findall('[^A-Za-z .\']', text)))
-data['user_name_has_nonprintable_chars'] = data['user_name'].apply(lambda text: int(len(re.findall('[^ -~]', text)) >= 1))
-data['user_name_num_nonprintable_chars'] = data['user_name'].apply(lambda text: len(re.findall('[^ -~]', text)))
-
-# nonzero number features
-data['num_urls_is_nonzero'] = data['num_urls'].apply(lambda number: int(number >= 1))
-data['num_media_is_nonzero'] = data['num_media'].apply(lambda number: int(number >= 1))
-data['num_hashtags_is_nonzero'] = data['num_hashtags'].apply(lambda number: int(number >= 1))
-data['num_mentions_is_more_than_2'] = data['num_hashtags'].apply(lambda number: int(number > 2))
-
-# per-unit-time related features
-data['user_created_at_delta'] = data['user_created_at'].apply(get_time_delta) # number of days from account creation to now
-data['created_at_delta'] = data['user_created_at'].apply(get_time_delta) # number of days from tweet creation to now
-data['user_statuses_count_per_day'] = data['user_statuses_count'] / data['user_created_at_delta']
-data['user_followers_count_per_day'] = data['user_followers_count'] / data['user_created_at_delta']
-data['user_listed_count_per_day'] = data['user_listed_count'] / data['user_created_at_delta']
-data['user_friends_count_per_day'] = data['user_friends_count'] / data['user_created_at_delta']
-data['user_favourites_count_per_day'] = data['user_favourites_count'] / data['user_created_at_delta']
-data['retweet_count_per_day'] = data['retweet_count'] / data['created_at_delta']
-
-# need-to-convert-format features
-data['user_default_profile'] = data['user_default_profile'].astype(int)
-data['user_profile_use_background_image'] = data['user_profile_use_background_image'].astype(int)
-data['user_default_profile_image'] = data['user_default_profile_image'].astype(int)
-
-
-# select relevant features based on their quality (see 'features to use'.docx file)
-features = {
+# define relevant features based on their quality (see 'features to use'.docx file)
+FEATURES = {
     'features_basic_all':
         'fake ~ retweet_count + user_verified + user_friends_count + user_followers_count + user_favourites_count + ' \
         'num_hashtags + num_mentions + num_urls + num_media',
@@ -273,24 +149,145 @@ features = {
         'user_listed_count_per_day + user_friends_count_per_day + user_favourites_count_per_day + retweet_count_per_day'
 }
 
-# choose feature set and model for the classifier
-features = features[FEATURES_TO_USE] #default: features_extended_some_multiple_without_text_num_swears
+# define functions needed to compute features
+def number_of_swears(text):
+    number = 0
+    swearwords = ['fuck', 'shit', 'dumb', 'retard', 'kill', 'crap']
+    for swearword in swearwords:
+        number += len(re.findall(swearword, text.lower()))
+    return number
+def get_weekday_number_from_text(text):
+    weekdays = {'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7}
+    weekday_text = re.search('^([A-Z][a-z][a-z])\s', text).group(1)
+    weekday_number = weekdays[weekday_text]
+    utc_hour = int(re.search('\s([0-9][0-9]):', text).group(1))
+    if utc_hour - 5 < 0:  # although in the UK the day number is 'weekday_number', in the US the day number might be one less due to timezone shift
+        weekday_number -= 1
+    if weekday_number == 0:
+        weekday_number = 7
+    return weekday_number
+def get_time_delta(datetime_created_string):
+    datetime_today = datetime.datetime.now()
+    datetime_created = datetime.datetime.strptime(datetime_created_string, "%a %b %d %H:%M:%S +0000 %Y")
+    datetime_delta = datetime_today - datetime_created
+    return datetime_delta.days
+def get_est_hour_from_text(text):
+    utc_hour = int(re.search('\s([0-9][0-9]):', text).group(1))
+    est_hour = (utc_hour + 24 - 5) % 24
+    return est_hour
+def get_hour_of_week_from_text(text):
+    hour_of_week = (get_weekday_number_from_text(text) - 1) * 24 + get_est_hour_from_text(text)
+    return hour_of_week
 
-y, X = dmatrices(features, data, return_type='dataframe')
-y_array, X_array = np.ravel(y.values), X.values
+# add derived features related to various base features
+def add_derived_features(data):
 
-# use a Stratified K-Fold cross-validation method with minority class upsampling during training
-cv = StratifiedKFold(n_splits=CV_NUMBER_OF_SPLITS, shuffle=True, random_state=123)
-accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports, weights_list = [], [], [], [], []
+    # 'user_screen_name' related features
+    data['user_screen_name_has_caps'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z]', text)) >= 1))
+    data['user_screen_name_has_digits'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[0-9]', text)) >= 1))
+    data['user_screen_name_has_underscores'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[_]', text)) >= 1))
+    data['user_screen_name_has_caps_digits'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z0-9]', text)) >= 1))
+    data['user_screen_name_has_caps_underscores'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z_]', text)) >= 1))
+    data['user_screen_name_has_digits_underscores'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[0-9_]', text)) >= 1))
+    data['user_screen_name_has_caps_digits_underscores'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[A-Z0-9_]', text)) >= 1))
+    data['user_screen_name_num_caps'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z]', text)))
+    data['user_screen_name_num_digits'] = data['user_screen_name'].apply(lambda text: len(re.findall('[0-9]', text)))
+    data['user_screen_name_num_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[_]', text)))
+    data['user_screen_name_num_caps_digits'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z0-9]', text)))
+    data['user_screen_name_num_caps_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z_]', text)))
+    data['user_screen_name_num_digits_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[0-9_]', text)))
+    data['user_screen_name_num_caps_digits_underscores'] = data['user_screen_name'].apply(lambda text: len(re.findall('[A-Z0-9_]', text)))
+    data['user_screen_name_has_weird_chars'] = data['user_screen_name'].apply(lambda text: int(len(re.findall('[^A-Za-z .\']', text)) >= 1))
+    data['user_screen_name_num_weird_chars'] = data['user_screen_name'].apply(lambda text: len(re.findall('[^A-Za-z .\']', text)))
 
-# open file to write model performances into
-performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
-performances_writer = csv.writer(performances_file)
+    # 'text' related features
+    data['text_num_caps'] = data['text'].apply(lambda text: len(re.findall('[A-Z]', text)))
+    data['text_num_digits'] = data['text'].apply(lambda text: len(re.findall('[0-9]', text)))
+    data['text_num_nonstandard'] = data['text'].apply(lambda text: len(re.findall('[^A-Za-z0-9,.]', text)))
+    data['text_num_nonstandard_extended'] = data['text'].apply(lambda text: len(re.findall('[^A-Za-z0-9,.?!\-@#\']', text)))
+    data['text_num_exclam'] = data['text'].apply(lambda text: len(re.findall('[!]', text)))
+    data['text_num_caps_exclam'] = data['text'].apply(lambda text: len(re.findall('[A-Z!]', text)))
+    data['text_num_caps_digits'] = data['text'].apply(lambda text: len(re.findall('[A-Z0-9]', text)))
+    data['text_num_caps_digits_exclam'] = data['text'].apply(lambda text: len(re.findall('[A-Z0-9!]', text)))
+    data['text_num_swears'] = data['text'].apply(number_of_swears)
 
-if MODEL_NAME == 'logistic_regression':
+    # 'created_at' related features
+    data['created_at_hour'] = data['created_at'].apply(get_est_hour_from_text)
+    data['created_at_hour_18_to_00'] = data['created_at_hour'].isin([18, 19, 20, 21, 22, 23, 0]).astype(int)
+    data['created_at_hour_08_to_17'] = data['created_at_hour'].isin(range(8, 17)).astype(int)
+    data['created_at_weekday'] = data['created_at'].apply(get_weekday_number_from_text)
+    data['created_at_weekday_sun_mon_tue'] = data['created_at_weekday'].isin([7, 1, 2]).astype(int)
+    data['created_at_hour_of_week'] = data['created_at'].apply(get_hour_of_week_from_text)
+
+    # 'user_description' related features
+    data['user_description_num_caps'] = data['user_description'].apply(lambda text: len(re.findall('[A-Z]', text)))
+    data['user_description_num_digits'] = data['user_description'].apply(lambda text: len(re.findall('[0-9]', text)))
+    data['user_description_num_nonstandard'] = data['user_description'].apply(lambda text: len(re.findall('[^A-Za-z0-9,.]', text)))
+    data['user_description_num_nonstandard_extended'] = data['user_description'].apply(lambda text: len(re.findall('[^A-Za-z0-9,.?!\-@#\']', text)))
+    data['user_description_num_exclam'] = data['user_description'].apply(lambda text: len(re.findall('[!]', text)))
+    data['user_description_num_caps_with_num_nonstandard'] = data['user_description'].apply(lambda text: len(re.findall('[^a-z0-9,.]', text)))
+    data['user_description_num_non_a_to_z'] = data['user_description'].apply(lambda text: len(re.findall('[^a-z]', text)))
+    data['user_description_num_non_a_to_z_non_digits'] = data['user_description'].apply(lambda text: len(re.findall('[^a-z0-9]', text)))
+    data['user_description_num_caps_exclam'] = data['user_description'].apply(lambda text: len(re.findall('[A-Z!]', text)))
+
+    # 'user_name' related features
+    data['user_name_has_caps'] = data['user_name'].apply(lambda text: int(len(re.findall('[A-Z]', text)) >= 1))
+    data['user_name_has_digits'] = data['user_name'].apply(lambda text: int(len(re.findall('[0-9]', text)) >= 1))
+    data['user_name_has_underscores'] = data['user_name'].apply(lambda text: int(len(re.findall('[_]', text)) >= 1))
+    data['user_name_has_caps_digits'] = data['user_name'].apply(lambda text: int(len(re.findall('[A-Z0-9]', text)) >= 1))
+    data['user_name_has_caps_underscores'] = data['user_name'].apply(lambda text: int(len(re.findall('[A-Z_]', text)) >= 1))
+    data['user_name_has_digits_underscores'] = data['user_name'].apply(lambda text: int(len(re.findall('[0-9_]', text)) >= 1))
+    data['user_name_has_caps_digits_underscores'] = data['user_name'].apply(lambda text: int(len(re.findall('[A-Z0-9_]', text)) >= 1))
+    data['user_name_num_caps'] = data['user_name'].apply(lambda text: len(re.findall('[A-Z]', text)))
+    data['user_name_num_digits'] = data['user_name'].apply(lambda text: len(re.findall('[0-9]', text)))
+    data['user_name_num_underscores'] = data['user_name'].apply(lambda text: len(re.findall('[_]', text)))
+    data['user_name_num_caps_digits'] = data['user_name'].apply(lambda text: len(re.findall('[A-Z0-9]', text)))
+    data['user_name_num_caps_underscores'] = data['user_name'].apply(lambda text: len(re.findall('[A-Z_]', text)))
+    data['user_name_num_digits_underscores'] = data['user_name'].apply(lambda text: len(re.findall('[0-9_]', text)))
+    data['user_name_num_caps_digits_underscores'] = data['user_name'].apply(lambda text: len(re.findall('[A-Z0-9_]', text)))
+    data['user_name_has_weird_chars'] = data['user_name'].apply(lambda text: int(len(re.findall('[^A-Za-z .\']', text)) >= 1))
+    data['user_name_num_weird_chars'] = data['user_name'].apply(lambda text: len(re.findall('[^A-Za-z .\']', text)))
+    data['user_name_has_nonprintable_chars'] = data['user_name'].apply(lambda text: int(len(re.findall('[^ -~]', text)) >= 1))
+    data['user_name_num_nonprintable_chars'] = data['user_name'].apply(lambda text: len(re.findall('[^ -~]', text)))
+
+    # nonzero number features
+    data['num_urls_is_nonzero'] = data['num_urls'].apply(lambda number: int(number >= 1))
+    data['num_media_is_nonzero'] = data['num_media'].apply(lambda number: int(number >= 1))
+    data['num_hashtags_is_nonzero'] = data['num_hashtags'].apply(lambda number: int(number >= 1))
+    data['num_mentions_is_more_than_2'] = data['num_hashtags'].apply(lambda number: int(number > 2))
+
+    # per-unit-time related features
+    data['user_created_at_delta'] = data['user_created_at'].apply(get_time_delta)  # number of days from account creation to now
+    data['created_at_delta'] = data['user_created_at'].apply(get_time_delta)  # number of days from tweet creation to now
+    data['user_statuses_count_per_day'] = data['user_statuses_count'] / data['user_created_at_delta']
+    data['user_followers_count_per_day'] = data['user_followers_count'] / data['user_created_at_delta']
+    data['user_listed_count_per_day'] = data['user_listed_count'] / data['user_created_at_delta']
+    data['user_friends_count_per_day'] = data['user_friends_count'] / data['user_created_at_delta']
+    data['user_favourites_count_per_day'] = data['user_favourites_count'] / data['user_created_at_delta']
+    data['retweet_count_per_day'] = data['retweet_count'] / data['created_at_delta']
+
+    # need-to-convert-format features
+    data['user_default_profile'] = data['user_default_profile'].astype(int)
+    data['user_profile_use_background_image'] = data['user_profile_use_background_image'].astype(int)
+    data['user_default_profile_image'] = data['user_default_profile_image'].astype(int)
+    data['user_verified'] = data['user_verified'].astype(int)
+
+    return data
+
+def compute_svm_performance(writing_queue, X, y, SVM_KERNEL, SVM_MAX_ITER, SVM_C):
+
+    # initialise scores lists
+    accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports = [], [], [], []
+
+    # get Numpy arrays from Pandas dataframes
+    y_array, X_array = np.ravel(y.values), X.values
+
+    # use a Stratified K-Fold cross-validation method with minority class upsampling during training
+    cv = StratifiedKFold(n_splits=CV_NUMBER_OF_SPLITS, shuffle=True, random_state=123)
+
     for train_index, test_index in cv.split(X_array, y_array):
         # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
-        X_train, X_test, y_train, y_test = X.iloc[train_index,:], X.iloc[test_index,:], y.iloc[train_index,:], y.iloc[test_index,:]
+        X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index, :], y.iloc[test_index, :]
         data_train = pd.concat([y_train, X_train], axis=1)
 
         # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
@@ -305,78 +302,169 @@ if MODEL_NAME == 'logistic_regression':
         y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
 
         # fit model
-        #model = LogisticRegression(solver='liblinear', penalty='l1', verbose=1, tol=1.3)
-        model = LogisticRegression(solver='liblinear', penalty='l1')
-        model.fit(X_train_upsampled_array, y_train_upsampled_array)
+        # model = svm.SVC(C=C, kernel='rbf', probability=True, verbose=True)
+        model = svm.SVC(C=SVM_C, kernel=SVM_KERNEL, probability=True, verbose=False, max_iter=SVM_MAX_ITER)
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=ConvergenceWarning)
+            model.fit(X_train_upsampled_array, y_train_upsampled_array)
 
-        # calculate statistics for one fold
+        # calculate performances for one fold
         accuracy_scores.append(metrics.accuracy_score(y_test_array, model.predict(X_test_array)))
         roc_auc_scores.append(metrics.roc_auc_score(y_test_array, model.predict_proba(X_test_array)[:, 1]))
         confusion_matrices.append(metrics.confusion_matrix(y_test_array, model.predict(X_test_array)))
         classification_reports.append(metrics.classification_report(y_test, model.predict(X_test)))
 
-        # store feature weights (coefficients)
-        weights_list.append([coeff for coeff in (model.coef_)[0]])
+    # calculate averaged performances (from all folds)
+    mean_accuracy_score = np.mean(accuracy_scores)
+    mean_roc_auc_score = np.mean(roc_auc_scores)
+    mean_confusion_matrix = np.mean(confusion_matrices, axis=0)
 
-    # print statistics averaged over all folds
-    print("mean accuracy score: ", np.mean(accuracy_scores))
-    print("mean roc auc score: ", np.mean(roc_auc_scores))
-    print("mean confusion matrix: ", np.mean(confusion_matrices, axis=0))
-    weights_mean = np.mean(weights_list, axis=0)
-    features_weights = [X.columns.tolist(), weights_mean.tolist()]
-    features_weights = map(list, zip(*features_weights))
-    features_weights_sorted = sorted(features_weights, key=lambda column: abs(column[1]), reverse=True)
-    print("mean feature weights: ", features_weights_sorted)
+    results = [
+        datetime.datetime.now().time().strftime("%H:%M:%S.%f")[:-3], MODEL_NAME, SVM_KERNEL, str(SVM_MAX_ITER),
+        format(SVM_C, '.0E'), format(mean_accuracy_score, '0.10f'), format(mean_roc_auc_score, '0.10f'),
+        str(np.around(mean_confusion_matrix, 1).tolist())
+    ]
 
-if MODEL_NAME == 'svm':
-    #performances_file.write("model,kernel,max_iter,C,mean_accuracy_score,mean_roc_auc_score,mean_confusion_matrix\n") # write header to performances file
-    performances_writer.writerow(["model","kernel","max_iter","C","mean_accuracy_score","mean_roc_auc_score","mean_confusion_matrix"])  # write header to performances file
-    for SVM_KERNEL in ['linear', 'poly', 'rbf', 'sigmoid']:
-        for SVM_MAX_ITER in [10, 100, 1000, 5000, 10000, 50000, 100000]:
-            for C in [(k * (10 ** exp)) for exp in range(-10, 16, 1) for k in [1, 5]]:
-                for train_index, test_index in cv.split(X_array, y_array):
-                    # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
-                    X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index, :], y.iloc[test_index, :]
-                    data_train = pd.concat([y_train, X_train], axis=1)
+    ## # print averaged performances (from all folds) into CSV file
+    ## performances_writer.writerow(
+    ##     [MODEL_NAME, SVM_KERNEL, str(SVM_MAX_ITER), format(C, '.0E'), format(mean_accuracy_score, '0.10f'),
+    ##      format(mean_roc_auc_score, '0.10f'), str(np.around(mean_confusion_matrix, 1).tolist())]
+    ## )
 
-                    # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
-                    data_train_real = data_train[data_train.fake == 0]
-                    data_train_fake = data_train[data_train.fake == 1]
-                    data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
-                    data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
-                    y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+    # print progress
+    #print(
+    #    datetime.datetime.now().time().strftime("%H:%M:%S.%f")[:-3] + "\t" + MODEL_NAME + "\t" + SVM_KERNEL + "\t" +
+    #    str(SVM_MAX_ITER) + "\t" + format(C, '.0E') + "\t" + format(mean_accuracy_score, '0.5f') + "\t" +
+    #    format(mean_roc_auc_score, '0.5f') + "\t" + str(np.around(mean_confusion_matrix, 0).tolist())
+    #)
 
-                    # convert pandas dataframes into numpy arrays
-                    y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
-                    y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+    writing_queue.put(results)
+    return 'done'
 
-                    # fit model
-                    # model = svm.SVC(C=C, kernel='rbf', probability=True, verbose=True)
-                    model = svm.SVC(C=C, kernel=SVM_KERNEL, probability=True, verbose=False, max_iter=SVM_MAX_ITER)
-                    model.fit(X_train_upsampled_array, y_train_upsampled_array)
 
-                    # calculate performances for one fold
-                    accuracy_scores.append(metrics.accuracy_score(y_test_array, model.predict(X_test_array)))
-                    roc_auc_scores.append(metrics.roc_auc_score(y_test_array, model.predict_proba(X_test_array)[:, 1]))
-                    confusion_matrices.append(metrics.confusion_matrix(y_test_array, model.predict(X_test_array)))
-                    classification_reports.append(metrics.classification_report(y_test, model.predict(X_test)))
+def svm_writer(writing_queue):
+    # open file to write model performances into
+    performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
+    performances_writer = csv.writer(performances_file)
 
-                # print averaged performances (from all folds) into CSV file
-                mean_accuracy_score = np.mean(accuracy_scores)
-                mean_roc_auc_score = np.mean(roc_auc_scores)
-                mean_confusion_matrix = np.mean(confusion_matrices, axis=0)
-                performances_writer.writerow(
-                    [MODEL_NAME, SVM_KERNEL, str(SVM_MAX_ITER), format(C, '.0E'), format(mean_accuracy_score, '0.10f'),
-                     format(mean_roc_auc_score, '0.10f'), str(np.around(mean_confusion_matrix, 1).tolist())]
-                )
+    # write header to performances file
+    performances_writer.writerow(["model","kernel","max_iter","C","mean_accuracy_score","mean_roc_auc_score","mean_confusion_matrix"])
 
-                # print progress
-                print(
-                    datetime.datetime.now().time().strftime("%H:%M:%S.%f")[:-3] + "\t" + MODEL_NAME + "\t" + SVM_KERNEL + "\t" + str(SVM_MAX_ITER) + "\t" +
-                    format(C, '.0E') + "\t" + format(mean_accuracy_score, '0.5f') + "\t" + format(mean_roc_auc_score, '0.5f') + "\t" +
-                    str(np.around(mean_confusion_matrix, 0).tolist())
-                )
+    # keep writing into file data from queue
+    while True:
+        # wait for result to appear in the queue
+        results = writing_queue.get()
 
-# close file into which the model performances have been written
-performances_file.close()
+        # if got signal 'kill' exit the loop
+        if results == 'kill':
+            break
+
+        # print averaged performances (from all folds) to terminal
+        print("\t".join(results))
+
+        # print averaged performances (from all folds) into CSV file
+        performances_writer.writerow(results[1:])
+
+    # close file into which the model performances have been written
+    performances_file.close()
+
+
+if __name__ == '__main__':
+
+    # import data from TSV file
+    data = pd.read_csv('dataset_new_combined_20170804.tsv', sep='\t')
+    data = data.dropna(subset = ['is_fake_news_2'])
+    data = data.drop(data[data.is_fake_news_2 == 'UNKNOWN'].index)
+    data['fake'] = (data.is_fake_news_2 == 'TRUE').astype(int)
+
+    # add derived features related to various base features
+    data = add_derived_features(data)
+
+    # choose feature set given by FEATURES_TO_USE
+    features = FEATURES[FEATURES_TO_USE]
+
+    # get feature and label data based on 'features' variable
+    y, X = dmatrices(features, data, return_type='dataframe')
+    y_array, X_array = np.ravel(y.values), X.values
+
+    if MODEL_NAME == 'logistic_regression':
+
+        # initialise scores fields
+        accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports, weights_list = [], [], [], [], []
+
+        # use a Stratified K-Fold cross-validation method with minority class upsampling during training
+        cv = StratifiedKFold(n_splits=CV_NUMBER_OF_SPLITS, shuffle=True, random_state=123)
+
+        for train_index, test_index in cv.split(X_array, y_array):
+            # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
+            X_train, X_test, y_train, y_test = X.iloc[train_index,:], X.iloc[test_index,:], y.iloc[train_index,:], y.iloc[test_index,:]
+            data_train = pd.concat([y_train, X_train], axis=1)
+
+            # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
+            data_train_real = data_train[data_train.fake == 0]
+            data_train_fake = data_train[data_train.fake == 1]
+            data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
+            data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
+            y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+
+            # convert pandas dataframes into numpy arrays
+            y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
+            y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+            # fit model
+            #model = LogisticRegression(solver='liblinear', penalty='l1', verbose=1, tol=1.3)
+            model = LogisticRegression(solver='liblinear', penalty='l1')
+            model.fit(X_train_upsampled_array, y_train_upsampled_array)
+
+            # calculate statistics for one fold
+            accuracy_scores.append(metrics.accuracy_score(y_test_array, model.predict(X_test_array)))
+            roc_auc_scores.append(metrics.roc_auc_score(y_test_array, model.predict_proba(X_test_array)[:, 1]))
+            confusion_matrices.append(metrics.confusion_matrix(y_test_array, model.predict(X_test_array)))
+            classification_reports.append(metrics.classification_report(y_test, model.predict(X_test)))
+
+            # store feature weights (coefficients)
+            weights_list.append([coeff for coeff in (model.coef_)[0]])
+
+        # print statistics averaged over all folds
+        print("mean accuracy score: ", np.mean(accuracy_scores))
+        print("mean roc auc score: ", np.mean(roc_auc_scores))
+        print("mean confusion matrix: ", np.mean(confusion_matrices, axis=0))
+        weights_mean = np.mean(weights_list, axis=0)
+        features_weights = [X.columns.tolist(), weights_mean.tolist()]
+        features_weights = map(list, zip(*features_weights))
+        features_weights_sorted = sorted(features_weights, key=lambda column: abs(column[1]), reverse=True)
+        print("mean feature weights: ", features_weights_sorted)
+
+    if MODEL_NAME == 'svm':
+
+        # open file to write model performances into
+        #performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
+        #performances_writer = csv.writer(performances_file)
+
+        # write header to performances file
+        #performances_writer.writerow(["model","kernel","max_iter","C","mean_accuracy_score","mean_roc_auc_score","mean_confusion_matrix"])
+
+        # set up parallel processing (init writing queue, init jobs list, init processes pool, start svm_writer listener)
+        manager = mp.Manager()
+        writing_queue = manager.Queue()
+        jobs = []
+        pool = mp.Pool(processes=SVM_NUMBER_OF_PROCESSES + 1) # additional 1 process is for svm_writer which shouldn't take up much CPU power
+        pool.apply_async(svm_writer, (writing_queue,))
+
+        # calculate performances
+        for SVM_KERNEL in SVM_KERNEL_LIST:
+            for SVM_MAX_ITER in SVM_MAX_ITER_LIST:
+                for SVM_C in SVM_C_LIST:
+                    jobs.append(pool.apply_async(compute_svm_performance, (writing_queue, X, y, SVM_KERNEL, SVM_MAX_ITER, SVM_C)))
+
+        # clean up parallel processing (close pool, wait for processes to finish, kill writing_queue, wait for queue to be killed)
+        pool.close()
+        for job in jobs:
+            job.get()
+        writing_queue.put('kill')
+        pool.join()
+        print("DONE")
+
+        # close file into which the model performances have been written
+        #performances_file.close()
 
