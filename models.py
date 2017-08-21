@@ -2,6 +2,10 @@
 
 # TODO: try LinearSVM instead of SVM.SVC --> improvement?
 # TODO: try normalising inputs to SVM to [-1,+1] --> convergence?, improvement?
+# TODO: try looping through gamma parameter for RBF kernel in SVM
+# TODO: for logistic regression use features selected using the new method (where small percentage difference mean is eliminated)
+# TODO: change calculation of difference in means into calculation of standard deviations
+# TODO: try downsampling the 'other news' class to 2:1 and 1:1 wrt 'fake' news class --> less overfitting? more balance in performances?
 
 import pandas as pd
 from patsy import dmatrices
@@ -18,10 +22,10 @@ import csv
 import multiprocessing as mp
 import warnings
 
-MODEL_NAME              = 'svm'                                                                # choose 'logistic_regression', 'svm'
-FEATURES_TO_USE         = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
 PERFORMANCES_FILE_NAME  = 'performances.csv'                                                   # default 'performances.csv'
+MODEL_NAME              = 'logistic_regression'                                                # choose 'logistic_regression', 'svm'
 CV_NUMBER_OF_SPLITS     = 5                                                                    # number of splits for cross-validation, default = 5
+SVM_FEATURES_TO_USE     = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
 SVM_NUMBER_OF_PROCESSES = 47                                                                   # number of processes to use for parallel computing in SVM, default 4 (47 for DSI cluster)
 SVM_KERNEL_LIST         = ['linear', 'poly', 'rbf', 'sigmoid']                                 # SVM kernel list, default ['linear', 'poly', 'rbf', 'sigmoid']
 SVM_MAX_ITER_LIST       = [(k * (10 ** exp)) for exp in range(1, 7, 1) for k in [1, 5]]        # SVM max iter list, default [10, 100, 1000, 5000, 10000, 50000, 100000]
@@ -279,6 +283,7 @@ def add_derived_features(data):
 
     return data
 
+# SVM functions
 def compute_svm_performance(writing_queue, X, y, SVM_KERNEL, SVM_POLY_DEGREE, SVM_MAX_ITER, SVM_C):
 
     # initialise scores lists
@@ -343,8 +348,6 @@ def compute_svm_performance(writing_queue, X, y, SVM_KERNEL, SVM_POLY_DEGREE, SV
 
     writing_queue.put(results)
     return 'done'
-
-
 def svm_writer(writing_queue):
     # open file to write model performances into
     performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
@@ -375,6 +378,74 @@ def svm_writer(writing_queue):
     # close file into which the model performances have been written
     performances_file.close()
 
+def compute_logistic_regression_performance(X, y):
+
+    # initialise scores lists
+    accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports, precision_scores, recall_scores, f1_scores, weights_list = [], [], [], [], [], [], [], []
+
+    # get Numpy arrays from Pandas dataframes
+    y_array, X_array = np.ravel(y.values), X.values
+
+    # use a Stratified K-Fold cross-validation method with minority class upsampling during training
+    cv = StratifiedKFold(n_splits=CV_NUMBER_OF_SPLITS, shuffle=True, random_state=123)
+
+    for train_index, test_index in cv.split(X_array, y_array):
+        # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
+        X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index,
+                                                                                          :], y.iloc[test_index, :]
+        data_train = pd.concat([y_train, X_train], axis=1)
+
+        # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
+        data_train_real = data_train[data_train.fake == 0]
+        data_train_fake = data_train[data_train.fake == 1]
+        data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0],
+                                             random_state=123)
+        data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
+        y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+
+        # convert pandas dataframes into numpy arrays
+        y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
+        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+        # fit model
+        # model = LogisticRegression(solver='liblinear', penalty='l1', verbose=1, tol=1.3)
+        model = LogisticRegression(solver='liblinear', penalty='l1')
+        model.fit(X_train_upsampled_array, y_train_upsampled_array)
+
+        # calculate performances for one fold
+        y_pred = model.predict(X_test_array)
+        y_pred_proba = model.predict_proba(X_test_array)
+        accuracy_scores.append(metrics.accuracy_score(y_test_array, y_pred))
+        roc_auc_scores.append(metrics.roc_auc_score(y_test_array, y_pred_proba[:, 1]))
+        confusion_matrices.append(metrics.confusion_matrix(y_test_array, y_pred))
+        classification_reports.append(metrics.classification_report(y_test_array, y_pred))
+        precision_scores.append(metrics.precision_score(y_test_array, y_pred))
+        recall_scores.append(metrics.recall_score(y_test_array, y_pred))
+        f1_scores.append(metrics.f1_score(y_test_array, y_pred))
+        weights_list.append([coeff for coeff in (model.coef_)[0]])
+
+    mean_accuracy_score = np.mean(accuracy_scores)
+    mean_roc_auc_score = np.mean(roc_auc_scores)
+    mean_confusion_matrix = np.mean(confusion_matrices, axis=0)
+    mean_precision_score = np.mean(precision_scores)
+    mean_recall_score = np.mean(recall_scores)
+    mean_f1_score = np.mean(f1_scores)
+    weights_mean = np.mean(weights_list, axis=0)
+    features_weights = [X.columns.tolist(), weights_mean.tolist()]
+    features_weights = map(list, zip(*features_weights))
+    features_weights_sorted = sorted(features_weights, key=lambda column: abs(column[1]), reverse=True)
+
+    results = [
+        format(mean_accuracy_score, '0.10f'), format(mean_roc_auc_score, '0.10f'),
+        format(mean_precision_score, '0.10f'),
+        format(mean_recall_score, '0.10f'), format(mean_f1_score, '0.10f'),
+        str(np.around(mean_confusion_matrix, 2)[0, 0]),
+        str(np.around(mean_confusion_matrix, 2)[0, 1]), str(np.around(mean_confusion_matrix, 2)[1, 0]),
+        str(np.around(mean_confusion_matrix, 2)[1, 1]), str(features_weights_sorted)
+    ]
+
+    print("\t".join(results))
+
 
 if __name__ == '__main__':
 
@@ -387,62 +458,31 @@ if __name__ == '__main__':
     # add derived features related to various base features
     data = add_derived_features(data)
 
-    # choose feature set given by FEATURES_TO_USE
-    features = FEATURES[FEATURES_TO_USE]
-
-    # get feature and label data based on 'features' variable
-    y, X = dmatrices(features, data, return_type='dataframe')
-    y_array, X_array = np.ravel(y.values), X.values
-
     if MODEL_NAME == 'logistic_regression':
 
-        # initialise scores fields
-        accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports, weights_list = [], [], [], [], []
+        results_header = [
+            "mean_accuracy_score", "mean_roc_auc_score", "mean_precision_score", "mean_recall_score", "mean_f1_score",
+            "mean_cm_TN", "mean_cm_FP", "mean_cm_FN", "mean_cm_TP", "features_weights_sorted"
+        ]
+        print("\t".join(results_header))
 
-        # use a Stratified K-Fold cross-validation method with minority class upsampling during training
-        cv = StratifiedKFold(n_splits=CV_NUMBER_OF_SPLITS, shuffle=True, random_state=123)
+        for LOG_REG_FEATURE_SET_NAME in FEATURES:
 
-        for train_index, test_index in cv.split(X_array, y_array):
-            # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
-            X_train, X_test, y_train, y_test = X.iloc[train_index,:], X.iloc[test_index,:], y.iloc[train_index,:], y.iloc[test_index,:]
-            data_train = pd.concat([y_train, X_train], axis=1)
+            # choose feature set given by FEATURES_TO_USE
+            features = FEATURES[LOG_REG_FEATURE_SET_NAME]
+            print(LOG_REG_FEATURE_SET_NAME)
+            # get feature and label data based on 'features' variable
+            y, X = dmatrices(features, data, return_type='dataframe')
 
-            # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
-            data_train_real = data_train[data_train.fake == 0]
-            data_train_fake = data_train[data_train.fake == 1]
-            data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
-            data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
-            y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+            compute_logistic_regression_performance(X, y)
 
-            # convert pandas dataframes into numpy arrays
-            y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
-            y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
-
-            # fit model
-            #model = LogisticRegression(solver='liblinear', penalty='l1', verbose=1, tol=1.3)
-            model = LogisticRegression(solver='liblinear', penalty='l1')
-            model.fit(X_train_upsampled_array, y_train_upsampled_array)
-
-            # calculate statistics for one fold
-            accuracy_scores.append(metrics.accuracy_score(y_test_array, model.predict(X_test_array)))
-            roc_auc_scores.append(metrics.roc_auc_score(y_test_array, model.predict_proba(X_test_array)[:, 1]))
-            confusion_matrices.append(metrics.confusion_matrix(y_test_array, model.predict(X_test_array)))
-            classification_reports.append(metrics.classification_report(y_test, model.predict(X_test)))
-
-            # store feature weights (coefficients)
-            weights_list.append([coeff for coeff in (model.coef_)[0]])
-
-        # print statistics averaged over all folds
-        print("mean accuracy score: ", np.mean(accuracy_scores))
-        print("mean roc auc score: ", np.mean(roc_auc_scores))
-        print("mean confusion matrix: ", np.mean(confusion_matrices, axis=0))
-        weights_mean = np.mean(weights_list, axis=0)
-        features_weights = [X.columns.tolist(), weights_mean.tolist()]
-        features_weights = map(list, zip(*features_weights))
-        features_weights_sorted = sorted(features_weights, key=lambda column: abs(column[1]), reverse=True)
-        print("mean feature weights: ", features_weights_sorted)
 
     if MODEL_NAME == 'svm':
+
+        # choose feature set given by FEATURES_TO_USE
+        features = FEATURES[SVM_FEATURES_TO_USE]
+        # get feature and label data based on 'features' variable
+        y, X = dmatrices(features, data, return_type='dataframe')
 
         # set up parallel processing (init writing queue, init jobs list, init processes pool, start svm_writer listener)
         manager = mp.Manager()
