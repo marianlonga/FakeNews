@@ -1,5 +1,8 @@
 # (c) 2017 Marian Longa
 
+# TODO: try LinearSVM instead of SVM.SVC --> improvement?
+# TODO: try normalising inputs to SVM to [-1,+1] --> convergence?, improvement?
+
 import pandas as pd
 from patsy import dmatrices
 import numpy as np
@@ -19,10 +22,12 @@ MODEL_NAME              = 'svm'                                                 
 FEATURES_TO_USE         = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
 PERFORMANCES_FILE_NAME  = 'performances.csv'                                                   # default 'performances.csv'
 CV_NUMBER_OF_SPLITS     = 5                                                                    # number of splits for cross-validation, default = 5
-SVM_NUMBER_OF_PROCESSES = 4                                                                    # number of processes to use for parallel computing in SVM, default 4 (use the number of CPU cores of current machine)
-SVM_KERNEL_LIST         = ['linear']                                                           # SVM kernel list, default ['linear', 'poly', 'rbf', 'sigmoid']
-SVM_MAX_ITER_LIST       = [10, 100, 1000]                                                      # SVM max iter list, default [10, 100, 1000, 5000, 10000, 50000, 100000]
-SVM_C_LIST              = [(k * (10 ** exp)) for exp in range(-10, 11, 1) for k in [1, 5]]     # SVM C list, default [(k * (10 ** exp)) for exp in range(-10, 11, 1) for k in [1, 5]]
+SVM_NUMBER_OF_PROCESSES = 47                                                                   # number of processes to use for parallel computing in SVM, default 4 (47 for DSI cluster)
+SVM_KERNEL_LIST         = ['linear', 'poly', 'rbf', 'sigmoid']                                 # SVM kernel list, default ['linear', 'poly', 'rbf', 'sigmoid']
+SVM_MAX_ITER_LIST       = [(k * (10 ** exp)) for exp in range(1, 7, 1) for k in [1, 5]]        # SVM max iter list, default [10, 100, 1000, 5000, 10000, 50000, 100000]
+SVM_C_LIST              = [(k * (10 ** exp)) for exp in range(-15, 16, 1) for k in [1, 5]]     # SVM C list, default [(k * (10 ** exp)) for exp in range(-10, 11, 1) for k in [1, 5]]
+SVM_CACHE_SIZE          = 5000                                                                 # default 200 (5000 for DSI cluster)
+SVM_POLY_DEGREE_LIST    = [2, 3, 4, 5]                                                         # default [2,3,4,5]
 
 # define relevant features based on their quality (see 'features to use'.docx file)
 FEATURES = {
@@ -274,10 +279,10 @@ def add_derived_features(data):
 
     return data
 
-def compute_svm_performance(writing_queue, X, y, SVM_KERNEL, SVM_MAX_ITER, SVM_C):
+def compute_svm_performance(writing_queue, X, y, SVM_KERNEL, SVM_POLY_DEGREE, SVM_MAX_ITER, SVM_C):
 
     # initialise scores lists
-    accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports = [], [], [], []
+    accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports, precision_scores, recall_scores, f1_scores = [], [], [], [], [], [], []
 
     # get Numpy arrays from Pandas dataframes
     y_array, X_array = np.ravel(y.values), X.values
@@ -303,40 +308,38 @@ def compute_svm_performance(writing_queue, X, y, SVM_KERNEL, SVM_MAX_ITER, SVM_C
 
         # fit model
         # model = svm.SVC(C=C, kernel='rbf', probability=True, verbose=True)
-        model = svm.SVC(C=SVM_C, kernel=SVM_KERNEL, probability=True, verbose=False, max_iter=SVM_MAX_ITER)
+        model = svm.SVC(C=SVM_C, kernel=SVM_KERNEL, probability=True, verbose=False, max_iter=SVM_MAX_ITER, degree=SVM_POLY_DEGREE, cache_size=SVM_CACHE_SIZE)
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=ConvergenceWarning)
             model.fit(X_train_upsampled_array, y_train_upsampled_array)
 
         # calculate performances for one fold
-        accuracy_scores.append(metrics.accuracy_score(y_test_array, model.predict(X_test_array)))
-        roc_auc_scores.append(metrics.roc_auc_score(y_test_array, model.predict_proba(X_test_array)[:, 1]))
-        confusion_matrices.append(metrics.confusion_matrix(y_test_array, model.predict(X_test_array)))
-        classification_reports.append(metrics.classification_report(y_test, model.predict(X_test)))
+        y_pred = model.predict(X_test_array)
+        y_pred_proba = model.predict_proba(X_test_array)
+        accuracy_scores.append(metrics.accuracy_score(y_test_array, y_pred))
+        roc_auc_scores.append(metrics.roc_auc_score(y_test_array, y_pred_proba[:, 1]))
+        confusion_matrices.append(metrics.confusion_matrix(y_test_array, y_pred))
+        classification_reports.append(metrics.classification_report(y_test_array, y_pred))
+        precision_scores.append(metrics.precision_score(y_test_array, y_pred))
+        recall_scores.append(metrics.recall_score(y_test_array, y_pred))
+        f1_scores.append(metrics.f1_score(y_test_array, y_pred))
 
     # calculate averaged performances (from all folds)
     mean_accuracy_score = np.mean(accuracy_scores)
     mean_roc_auc_score = np.mean(roc_auc_scores)
     mean_confusion_matrix = np.mean(confusion_matrices, axis=0)
+    mean_precision_score = np.mean(precision_scores)
+    mean_recall_score = np.mean(recall_scores)
+    mean_f1_score = np.mean(f1_scores)
 
     results = [
-        datetime.datetime.now().time().strftime("%H:%M:%S.%f")[:-3], MODEL_NAME, SVM_KERNEL, str(SVM_MAX_ITER),
-        format(SVM_C, '.0E'), format(mean_accuracy_score, '0.10f'), format(mean_roc_auc_score, '0.10f'),
-        str(np.around(mean_confusion_matrix, 1).tolist())
+        str(datetime.datetime.now()), MODEL_NAME, SVM_KERNEL, str(SVM_MAX_ITER),
+        str(SVM_POLY_DEGREE), format(SVM_C, '.0E'), format(mean_accuracy_score, '0.10f'),
+        format(mean_roc_auc_score, '0.10f'), format(mean_precision_score, '0.10f'), format(mean_recall_score, '0.10f'),
+        format(mean_f1_score, '0.10f'), str(np.around(mean_confusion_matrix, 2)[0,0]),
+        str(np.around(mean_confusion_matrix, 2)[0,1]), str(np.around(mean_confusion_matrix, 2)[1,0]),
+        str(np.around(mean_confusion_matrix, 2)[1,1])
     ]
-
-    ## # print averaged performances (from all folds) into CSV file
-    ## performances_writer.writerow(
-    ##     [MODEL_NAME, SVM_KERNEL, str(SVM_MAX_ITER), format(C, '.0E'), format(mean_accuracy_score, '0.10f'),
-    ##      format(mean_roc_auc_score, '0.10f'), str(np.around(mean_confusion_matrix, 1).tolist())]
-    ## )
-
-    # print progress
-    #print(
-    #    datetime.datetime.now().time().strftime("%H:%M:%S.%f")[:-3] + "\t" + MODEL_NAME + "\t" + SVM_KERNEL + "\t" +
-    #    str(SVM_MAX_ITER) + "\t" + format(C, '.0E') + "\t" + format(mean_accuracy_score, '0.5f') + "\t" +
-    #    format(mean_roc_auc_score, '0.5f') + "\t" + str(np.around(mean_confusion_matrix, 0).tolist())
-    #)
 
     writing_queue.put(results)
     return 'done'
@@ -348,7 +351,11 @@ def svm_writer(writing_queue):
     performances_writer = csv.writer(performances_file)
 
     # write header to performances file
-    performances_writer.writerow(["model","kernel","max_iter","C","mean_accuracy_score","mean_roc_auc_score","mean_confusion_matrix"])
+    performances_writer.writerow(
+        ["datetime", "model", "kernel", "max_iter", "poly_degree", "C", "mean_accuracy_score", "mean_roc_auc_score",
+         "mean_precision_score", "mean_recall_score", "mean_f1_score", "mean_cm_TN", "mean_cm_FP",
+         "mean_cm_FN", "mean_cm_TP"]
+    )
 
     # keep writing into file data from queue
     while True:
@@ -360,10 +367,10 @@ def svm_writer(writing_queue):
             break
 
         # print averaged performances (from all folds) to terminal
-        print("\t".join(results))
+        #print("\t".join(results))
 
         # print averaged performances (from all folds) into CSV file
-        performances_writer.writerow(results[1:])
+        performances_writer.writerow(results)
 
     # close file into which the model performances have been written
     performances_file.close()
@@ -437,13 +444,6 @@ if __name__ == '__main__':
 
     if MODEL_NAME == 'svm':
 
-        # open file to write model performances into
-        #performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
-        #performances_writer = csv.writer(performances_file)
-
-        # write header to performances file
-        #performances_writer.writerow(["model","kernel","max_iter","C","mean_accuracy_score","mean_roc_auc_score","mean_confusion_matrix"])
-
         # set up parallel processing (init writing queue, init jobs list, init processes pool, start svm_writer listener)
         manager = mp.Manager()
         writing_queue = manager.Queue()
@@ -453,9 +453,11 @@ if __name__ == '__main__':
 
         # calculate performances
         for SVM_KERNEL in SVM_KERNEL_LIST:
-            for SVM_MAX_ITER in SVM_MAX_ITER_LIST:
-                for SVM_C in SVM_C_LIST:
-                    jobs.append(pool.apply_async(compute_svm_performance, (writing_queue, X, y, SVM_KERNEL, SVM_MAX_ITER, SVM_C)))
+            SVM_POLY_DEGREE_LIST_TO_USE = SVM_POLY_DEGREE_LIST if SVM_KERNEL == 'poly' else [0]
+            for SVM_POLY_DEGREE in SVM_POLY_DEGREE_LIST_TO_USE:
+                for SVM_MAX_ITER in SVM_MAX_ITER_LIST:
+                    for SVM_C in SVM_C_LIST:
+                        jobs.append(pool.apply_async(compute_svm_performance, (writing_queue, X, y, SVM_KERNEL, SVM_POLY_DEGREE, SVM_MAX_ITER, SVM_C)))
 
         # clean up parallel processing (close pool, wait for processes to finish, kill writing_queue, wait for queue to be killed)
         pool.close()
@@ -464,7 +466,4 @@ if __name__ == '__main__':
         writing_queue.put('kill')
         pool.join()
         print("DONE")
-
-        # close file into which the model performances have been written
-        #performances_file.close()
 
