@@ -12,10 +12,12 @@ from patsy import dmatrices
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn import svm
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn import metrics
 from sklearn.utils import resample
 from sklearn.model_selection import StratifiedKFold
 from sklearn.exceptions import ConvergenceWarning
+from sklearn.preprocessing import StandardScaler
 import re
 import datetime
 import csv
@@ -23,8 +25,9 @@ import multiprocessing as mp
 import warnings
 
 PERFORMANCES_FILE_NAME  = 'performances.csv'                                                   # default 'performances.csv'
-MODEL_NAME              = 'logistic_regression'                                                # choose 'logistic_regression', 'svm'
+MODEL_NAME              = 'knn'                                                                # choose 'logistic_regression', 'svm', 'knn'
 CV_NUMBER_OF_SPLITS     = 5                                                                    # number of splits for cross-validation, default = 5
+USE_SCALED_DATA         = True                                                                 # default True
 SVM_FEATURES_TO_USE     = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
 SVM_NUMBER_OF_PROCESSES = 47                                                                   # number of processes to use for parallel computing in SVM, default 4 (47 for DSI cluster)
 SVM_KERNEL_LIST         = ['linear', 'poly', 'rbf', 'sigmoid']                                 # SVM kernel list, default ['linear', 'poly', 'rbf', 'sigmoid']
@@ -32,6 +35,43 @@ SVM_MAX_ITER_LIST       = [(k * (10 ** exp)) for exp in range(1, 7, 1) for k in 
 SVM_C_LIST              = [(k * (10 ** exp)) for exp in range(-15, 16, 1) for k in [1, 5]]     # SVM C list, default [(k * (10 ** exp)) for exp in range(-10, 11, 1) for k in [1, 5]]
 SVM_CACHE_SIZE          = 5000                                                                 # default 200 (5000 for DSI cluster)
 SVM_POLY_DEGREE_LIST    = [2, 3, 4, 5]                                                         # default [2,3,4,5]
+KNN_FEATURES_TO_USE     = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
+KNN_N_NEIGHBORS_LIST    = range(1, 201)                                                        # KNN number of nearest neighbors to use, default range(1, 51)
+
+
+# define all features
+statistics_features = [
+    'tweet_id', 'retweet_count', 'user_verified', 'user_friends_count', 'user_followers_count',
+    'user_favourites_count', 'geo_coordinates', 'num_hashtags', 'num_mentions', 'num_urls',
+    'num_media', 'num_media_is_nonzero',
+    'text_num_caps', 'text_num_digits', 'text_num_nonstandard', 'text_num_nonstandard_extended',
+    'text_num_exclam', 'text_num_caps_exclam', 'text_num_caps_digits', 'text_num_caps_digits_exclam',
+    'text_num_swears',
+    'num_urls_is_nonzero', 'num_hashtags_is_nonzero', 'num_mentions_is_more_than_2',
+    'created_at_hour', 'created_at_hour_08_to_17', 'created_at_hour_18_to_00', 'created_at_weekday', 'created_at_weekday_sun_mon_tue',
+    'created_at_hour_of_week',
+    'user_description_num_caps', 'user_description_num_digits', 'user_description_num_nonstandard',
+    'user_description_num_nonstandard_extended', 'user_description_num_exclam',
+    'user_description_num_caps_with_num_nonstandard', 'user_description_num_non_a_to_z',
+    'user_description_num_non_a_to_z_non_digits', 'user_description_num_caps_exclam',
+    'user_default_profile_image',
+    'user_listed_count',
+    'user_profile_use_background_image', 'user_default_profile',
+    'user_screen_name_has_caps', 'user_screen_name_has_digits', 'user_screen_name_has_underscores',
+    'user_screen_name_has_caps_digits', 'user_screen_name_has_caps_underscores', 'user_screen_name_has_digits_underscores',
+    'user_screen_name_has_caps_digits_underscores', 'user_screen_name_num_caps', 'user_screen_name_num_digits',
+    'user_screen_name_num_underscores', 'user_screen_name_num_caps_digits', 'user_screen_name_num_caps_underscores',
+    'user_screen_name_num_digits_underscores', 'user_screen_name_num_caps_digits_underscores',
+    'user_screen_name_has_weird_chars', 'user_screen_name_num_weird_chars',
+    'user_name_has_caps', 'user_name_has_digits', 'user_name_has_underscores', 'user_name_has_caps_digits',
+    'user_name_has_caps_underscores', 'user_name_has_digits_underscores', 'user_name_has_caps_digits_underscores',
+    'user_name_num_caps', 'user_name_num_digits', 'user_name_num_underscores', 'user_name_num_caps_digits',
+    'user_name_num_caps_underscores', 'user_name_num_digits_underscores', 'user_name_num_caps_digits_underscores',
+    'user_name_has_weird_chars', 'user_name_num_weird_chars', 'user_name_has_nonprintable_chars',
+    'user_name_num_nonprintable_chars',
+    'user_statuses_count', 'user_created_at_delta', 'user_statuses_count_per_day', 'user_followers_count_per_day',
+    'user_listed_count_per_day', 'user_friends_count_per_day', 'user_favourites_count_per_day', 'retweet_count_per_day'
+]
 
 # define relevant features based on their quality (see 'features to use'.docx file)
 FEATURES = {
@@ -370,7 +410,7 @@ def svm_writer(writing_queue):
             break
 
         # print averaged performances (from all folds) to terminal
-        #print("\t".join(results))
+        print("\t".join(results))
 
         # print averaged performances (from all folds) into CSV file
         performances_writer.writerow(results)
@@ -446,6 +486,67 @@ def compute_logistic_regression_performance(X, y):
 
     print("\t".join(results))
 
+def compute_knn_performance(X, y, KNN_N_NEIGHBORS):
+
+    # initialise scores lists
+    accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports, precision_scores, recall_scores, f1_scores = [], [], [], [], [], [], []
+
+    # get Numpy arrays from Pandas dataframes
+    y_array, X_array = np.ravel(y.values), X.values
+
+    # use a Stratified K-Fold cross-validation method with minority class upsampling during training
+    cv = StratifiedKFold(n_splits=CV_NUMBER_OF_SPLITS, shuffle=True, random_state=123)
+
+    for train_index, test_index in cv.split(X_array, y_array):
+        # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
+        X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index,
+                                                                                          :], y.iloc[test_index, :]
+        data_train = pd.concat([y_train, X_train], axis=1)
+
+        # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
+        data_train_real = data_train[data_train.fake == 0]
+        data_train_fake = data_train[data_train.fake == 1]
+        data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
+        data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
+        y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+
+        # convert pandas dataframes into numpy arrays
+        y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
+        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+        # fit model
+        model = KNeighborsClassifier(n_neighbors=KNN_N_NEIGHBORS, n_jobs=-1)
+        model.fit(X_train_upsampled_array, y_train_upsampled_array)
+
+        # calculate performances for one fold
+        y_pred = model.predict(X_test_array)
+        y_pred_proba = model.predict_proba(X_test_array)
+        accuracy_scores.append(metrics.accuracy_score(y_test_array, y_pred))
+        roc_auc_scores.append(metrics.roc_auc_score(y_test_array, y_pred_proba[:, 1]))
+        confusion_matrices.append(metrics.confusion_matrix(y_test_array, y_pred))
+        classification_reports.append(metrics.classification_report(y_test_array, y_pred))
+        precision_scores.append(metrics.precision_score(y_test_array, y_pred))
+        recall_scores.append(metrics.recall_score(y_test_array, y_pred))
+        f1_scores.append(metrics.f1_score(y_test_array, y_pred))
+
+    mean_accuracy_score = np.mean(accuracy_scores)
+    mean_roc_auc_score = np.mean(roc_auc_scores)
+    mean_confusion_matrix = np.mean(confusion_matrices, axis=0)
+    mean_precision_score = np.mean(precision_scores)
+    mean_recall_score = np.mean(recall_scores)
+    mean_f1_score = np.mean(f1_scores)
+
+    results = [
+        str(KNN_N_NEIGHBORS),
+        format(mean_accuracy_score, '0.10f'), format(mean_roc_auc_score, '0.10f'),
+        format(mean_precision_score, '0.10f'),
+        format(mean_recall_score, '0.10f'), format(mean_f1_score, '0.10f'),
+        str(np.around(mean_confusion_matrix, 2)[0, 0]),
+        str(np.around(mean_confusion_matrix, 2)[0, 1]), str(np.around(mean_confusion_matrix, 2)[1, 0]),
+        str(np.around(mean_confusion_matrix, 2)[1, 1])
+    ]
+
+    return results
 
 if __name__ == '__main__':
 
@@ -457,6 +558,12 @@ if __name__ == '__main__':
 
     # add derived features related to various base features
     data = add_derived_features(data)
+
+    # scale feature data so that each feature has mean of 0 and standard deviation of 1
+    data_scaled = data
+    data_scaled[statistics_features] = StandardScaler().fit_transform(data_scaled[statistics_features])
+    if USE_SCALED_DATA:
+        data = data_scaled
 
     if MODEL_NAME == 'logistic_regression':
 
@@ -475,7 +582,6 @@ if __name__ == '__main__':
             y, X = dmatrices(features, data, return_type='dataframe')
 
             compute_logistic_regression_performance(X, y)
-
 
     if MODEL_NAME == 'svm':
 
@@ -507,3 +613,31 @@ if __name__ == '__main__':
         pool.join()
         print("DONE")
 
+    if MODEL_NAME == 'knn':
+
+        # open file to write model performances into
+        performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
+        performances_writer = csv.writer(performances_file)
+
+        # write header to terminal and performances file
+        results_header = [
+            "n_neighbors", "mean_accuracy_score", "mean_roc_auc_score", "mean_precision_score", "mean_recall_score",
+            "mean_f1_score", "mean_cm_TN", "mean_cm_FP", "mean_cm_FN", "mean_cm_TP"
+        ]
+        print("\t".join(results_header))
+        performances_writer.writerow(results_header)
+
+        # choose feature set given by FEATURES_TO_USE
+        features = FEATURES[KNN_FEATURES_TO_USE]
+        # get feature and label data based on 'features' variable
+        y, X = dmatrices(features, data, return_type='dataframe')
+
+        for KNN_N_NEIGHBORS in KNN_N_NEIGHBORS_LIST:
+            # calculate performances
+            results = compute_knn_performance(X, y, KNN_N_NEIGHBORS)
+            # print averaged performances (from all folds) to terminal and CSV file
+            print("\t".join(results))
+            performances_writer.writerow(results)
+
+        # close file into which the model performances have been written
+        performances_file.close()
