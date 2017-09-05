@@ -4,8 +4,6 @@
 # TODO: try normalising inputs to SVM to [-1,+1] --> convergence?, improvement?
 # TODO: try looping through gamma parameter for RBF kernel in SVM
 # TODO: for logistic regression use features selected using the new method (where small percentage difference mean is eliminated)
-# TODO: change calculation of difference in means into calculation of standard deviations
-# TODO: try downsampling the 'other news' class to 2:1 and 1:1 wrt 'fake' news class --> less overfitting? more balance in performances?
 
 import pandas as pd
 from patsy import dmatrices
@@ -25,7 +23,7 @@ import multiprocessing as mp
 import warnings
 
 PERFORMANCES_FILE_NAME  = 'performances.csv'                                                   # default 'performances.csv'
-MODEL_NAME              = 'knn'                                                                # choose 'logistic_regression', 'svm', 'knn'
+MODEL_NAME              = 'log_reg'                                                            # choose 'log_reg', 'svm', 'knn'
 CV_NUMBER_OF_SPLITS     = 5                                                                    # number of splits for cross-validation, default = 5
 USE_SCALED_DATA         = True                                                                 # default True
 SVM_FEATURES_TO_USE     = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
@@ -37,7 +35,7 @@ SVM_CACHE_SIZE          = 5000                                                  
 SVM_POLY_DEGREE_LIST    = [2, 3, 4, 5]                                                         # default [2,3,4,5]
 KNN_FEATURES_TO_USE     = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
 KNN_N_NEIGHBORS_LIST    = range(1, 201)                                                        # KNN number of nearest neighbors to use, default range(1, 51)
-
+RESAMPLE                = 'up'                                                                 # whether to upsample minority class ('up' -- default) or downsample majority class ('down') or use the original data distribution ('none')
 
 # define all features
 statistics_features = [
@@ -338,25 +336,16 @@ def compute_svm_performance(writing_queue, X, y, SVM_KERNEL, SVM_POLY_DEGREE, SV
     for train_index, test_index in cv.split(X_array, y_array):
         # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
         X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index, :], y.iloc[test_index, :]
-        data_train = pd.concat([y_train, X_train], axis=1)
 
-        # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
-        data_train_real = data_train[data_train.fake == 0]
-        data_train_fake = data_train[data_train.fake == 1]
-        data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
-        data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
-        y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
-
-        # convert pandas dataframes into numpy arrays
-        y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
-        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+        # up/down-sample data to balance the training data set
+        X_train_array, X_test_array, y_train_array, y_test_array = resample_data(X_train, X_test, y_train, y_test)
 
         # fit model
         # model = svm.SVC(C=C, kernel='rbf', probability=True, verbose=True)
         model = svm.SVC(C=SVM_C, kernel=SVM_KERNEL, probability=True, verbose=False, max_iter=SVM_MAX_ITER, degree=SVM_POLY_DEGREE, cache_size=SVM_CACHE_SIZE)
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=ConvergenceWarning)
-            model.fit(X_train_upsampled_array, y_train_upsampled_array)
+            model.fit(X_train_array, y_train_array)
 
         # calculate performances for one fold
         y_pred = model.predict(X_test_array)
@@ -431,26 +420,15 @@ def compute_logistic_regression_performance(X, y):
 
     for train_index, test_index in cv.split(X_array, y_array):
         # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
-        X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index,
-                                                                                          :], y.iloc[test_index, :]
-        data_train = pd.concat([y_train, X_train], axis=1)
+        X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index, :], y.iloc[test_index, :]
 
-        # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
-        data_train_real = data_train[data_train.fake == 0]
-        data_train_fake = data_train[data_train.fake == 1]
-        data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0],
-                                             random_state=123)
-        data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
-        y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
-
-        # convert pandas dataframes into numpy arrays
-        y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
-        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+        # up/down-sample data to balance the training data set
+        X_train_array, X_test_array, y_train_array, y_test_array = resample_data(X_train, X_test, y_train, y_test)
 
         # fit model
         # model = LogisticRegression(solver='liblinear', penalty='l1', verbose=1, tol=1.3)
         model = LogisticRegression(solver='liblinear', penalty='l1')
-        model.fit(X_train_upsampled_array, y_train_upsampled_array)
+        model.fit(X_train_array, y_train_array)
 
         # calculate performances for one fold
         y_pred = model.predict(X_test_array)
@@ -486,6 +464,43 @@ def compute_logistic_regression_performance(X, y):
 
     print("\t".join(results))
 
+def resample_data(X_train, X_test, y_train, y_test):
+    data_train = pd.concat([y_train, X_train], axis=1)
+
+    if RESAMPLE == 'up':
+        # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
+        data_train_real = data_train[data_train.fake == 0]
+        data_train_fake = data_train[data_train.fake == 1]
+        data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
+        data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
+        y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+
+        # convert pandas dataframes into numpy arrays
+        y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
+        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+        X_train_array, X_test_array, y_train_array, y_test_array = X_train_upsampled_array, X_test_array, y_train_upsampled_array, y_test_array
+
+    if RESAMPLE == 'down':
+        # in the training set, downsample majority class (ie other news class) so that it has the same number of rows as the minority class (ie fake news class)
+        data_train_real = data_train[data_train.fake == 0]
+        data_train_fake = data_train[data_train.fake == 1]
+        data_train_real_downsampled = resample(data_train_real, replace=True, n_samples=data_train_fake.shape[0], random_state=123)
+        data_train_downsampled = pd.concat([data_train_fake, data_train_real_downsampled])
+        y_train_downsampled, X_train_downsampled = dmatrices(features, data_train_downsampled, return_type='dataframe')
+
+        # convert pandas dataframes into numpy arrays
+        y_train_downsampled_array, X_train_downsampled_array = np.ravel(y_train_downsampled.values), X_train_downsampled.values
+        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+        X_train_array, X_test_array, y_train_array, y_test_array = X_train_downsampled_array, X_test_array, y_train_downsampled_array, y_test_array
+
+    if RESAMPLE == 'none':
+        y_train_array, X_train_array = np.ravel(y_train.values), X_train.values
+        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+    return X_train_array, X_test_array, y_train_array, y_test_array
+
 def compute_knn_performance(X, y, KNN_N_NEIGHBORS):
 
     # initialise scores lists
@@ -499,24 +514,14 @@ def compute_knn_performance(X, y, KNN_N_NEIGHBORS):
 
     for train_index, test_index in cv.split(X_array, y_array):
         # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
-        X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index,
-                                                                                          :], y.iloc[test_index, :]
-        data_train = pd.concat([y_train, X_train], axis=1)
+        X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index, :], y.iloc[test_index, :]
 
-        # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
-        data_train_real = data_train[data_train.fake == 0]
-        data_train_fake = data_train[data_train.fake == 1]
-        data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
-        data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
-        y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
-
-        # convert pandas dataframes into numpy arrays
-        y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
-        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+        # up/down-sample data to balance the training data set
+        X_train_array, X_test_array, y_train_array, y_test_array = resample_data(X_train, X_test, y_train, y_test)
 
         # fit model
         model = KNeighborsClassifier(n_neighbors=KNN_N_NEIGHBORS, n_jobs=-1)
-        model.fit(X_train_upsampled_array, y_train_upsampled_array)
+        model.fit(X_train_array, y_train_array)
 
         # calculate performances for one fold
         y_pred = model.predict(X_test_array)
@@ -565,7 +570,7 @@ if __name__ == '__main__':
     if USE_SCALED_DATA:
         data = data_scaled
 
-    if MODEL_NAME == 'logistic_regression':
+    if MODEL_NAME == 'log_reg':
 
         results_header = [
             "mean_accuracy_score", "mean_roc_auc_score", "mean_precision_score", "mean_recall_score", "mean_f1_score",
