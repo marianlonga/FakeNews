@@ -9,24 +9,16 @@ from scipy import stats
 import seaborn as sns
 import re
 import datetime
-from pprint import pprint
-import sys
-import xlsxwriter
-import random
+from sklearn.preprocessing import StandardScaler
 
 sns.set(color_codes=True)
 
 INPUT_FILE_NAME             = '/Users/longaster/Desktop/UROP2017/fakenews/marian/dataset_new_combined_20170804.tsv'
 PLOTS_PATH                  = '/Users/longaster/Desktop/UROP2017/fakenews/marian/plots/'
 STATISTICS_CSV_FILE_NAME    = '/Users/longaster/Desktop/UROP2017/fakenews/marian/statistics.csv'
-STATISTICS_XLSX_FILE_NAME   = '/Users/longaster/Desktop/UROP2017/fakenews/marian/statistics.xlsx'
-CONDENSED_STATISTICS_XLSX_FILE_NAME = '/Users/longaster/Desktop/UROP2017/fakenews/marian/statistics_condensed.xlsx'
 DO_DISCRETE_PLOTS           = False
 DO_CONTINUOUS_PLOTS         = False
 DO_STATISTICS               = True
-DIFF_MEAN_PERCENTAGE_CUTOFF = 0.05
-P_VALUE_CUTOFF              = 0.01
-INCLUDE_TEXT_FEATURES       = True
 
 # read csv file
 data = pd.read_csv(INPUT_FILE_NAME, sep='\t')
@@ -242,137 +234,32 @@ if DO_STATISTICS:
         'user_statuses_count', 'user_created_at_delta', 'user_statuses_count_per_day', 'user_followers_count_per_day',
         'user_listed_count_per_day', 'user_friends_count_per_day', 'user_favourites_count_per_day', 'retweet_count_per_day'
     ]
-    feature_groups = [
-        ['tweet_id'],
-        ['retweet_count', 'retweet_count_per_day'],
-        ['user_verified'],
-        ['user_friends_count', 'user_friends_count_per_day'],
-        ['user_followers_count', 'user_followers_count_per_day'],
-        ['user_favourites_count', 'user_favourites_count_per_day'],
-        ['geo_coordinates'],
-        ['num_hashtags', 'num_hashtags_is_nonzero'],
-        ['num_mentions', 'num_mentions_is_more_than_2'],
-        ['num_urls', 'num_urls_is_nonzero'],
-        ['num_media', 'num_media_is_nonzero'],
-        ['text_num_caps', 'text_num_digits', 'text_num_nonstandard', 'text_num_nonstandard_extended',
-        'text_num_exclam', 'text_num_caps_exclam', 'text_num_caps_digits', 'text_num_caps_digits_exclam',
-        'text_num_swears'],
-        ['created_at_hour', 'created_at_hour_08_to_17', 'created_at_hour_18_to_00'],
-        ['created_at_weekday', 'created_at_weekday_sun_mon_tue'],
-        ['created_at_hour_of_week'],
-        ['user_description_num_caps', 'user_description_num_digits', 'user_description_num_nonstandard',
-        'user_description_num_nonstandard_extended', 'user_description_num_exclam',
-        'user_description_num_caps_with_num_nonstandard', 'user_description_num_non_a_to_z',
-        'user_description_num_non_a_to_z_non_digits', 'user_description_num_caps_exclam'],
-        ['user_default_profile_image'],
-        ['user_listed_count', 'user_listed_count_per_day'],
-        ['user_profile_use_background_image'],
-        ['user_default_profile'],
-        ['user_screen_name_has_caps', 'user_screen_name_has_digits', 'user_screen_name_has_underscores',
-        'user_screen_name_has_caps_digits', 'user_screen_name_has_caps_underscores', 'user_screen_name_has_digits_underscores',
-        'user_screen_name_has_caps_digits_underscores', 'user_screen_name_num_caps', 'user_screen_name_num_digits',
-        'user_screen_name_num_underscores', 'user_screen_name_num_caps_digits', 'user_screen_name_num_caps_underscores',
-        'user_screen_name_num_digits_underscores', 'user_screen_name_num_caps_digits_underscores',
-        'user_screen_name_has_weird_chars', 'user_screen_name_num_weird_chars'],
-        ['user_name_has_caps', 'user_name_has_digits', 'user_name_has_underscores', 'user_name_has_caps_digits',
-        'user_name_has_caps_underscores', 'user_name_has_digits_underscores', 'user_name_has_caps_digits_underscores',
-        'user_name_num_caps', 'user_name_num_digits', 'user_name_num_underscores', 'user_name_num_caps_digits',
-        'user_name_num_caps_underscores', 'user_name_num_digits_underscores', 'user_name_num_caps_digits_underscores',
-        'user_name_has_weird_chars', 'user_name_num_weird_chars', 'user_name_has_nonprintable_chars',
-        'user_name_num_nonprintable_chars'],
-        ['user_statuses_count', 'user_statuses_count_per_day'],
-        ['user_created_at_delta']
-    ]
+
+    # scale feature data so that each feature has mean of 0 and standard deviation of 1
+    data_scaled = data
+    data_scaled[statistics_features] = StandardScaler().fit_transform(data_scaled[statistics_features])
+    data_scaled_fake = data_scaled[data_scaled['fake'] == 1]
+    data_scaled_other = data_scaled[data_scaled['fake'] == 0]
 
     # calculate statistics and append them to a list
     statistics_current = []
     for feature in statistics_features:
         t_value, p_value = stats.ttest_ind(data_fake[feature].values, data_other[feature].values)
-        diff_mean_value = data_fake[feature].mean() - data_other[feature].mean()
-        diff_mean_percentage = diff_mean_value / data[feature].mean()
-        statistics_current.append([feature, diff_mean_value, diff_mean_percentage, p_value, float(t_value)])
-    if not INCLUDE_TEXT_FEATURES:
-        text_features_prefixes = ['user_name', 'user_screen_name', 'user_description', 'text']
-        statistics_current = [statistic for statistic in statistics_current if not statistic[0].startswith(tuple(text_features_prefixes))]
-    statistics_all = statistics_current
+        diff_mean = data_scaled_fake[feature].mean() - data_scaled_other[feature].mean()
+        statistics_current.append([feature, diff_mean, p_value, float(t_value)])
+    statistics_current = sorted(statistics_current, key=lambda s: abs(s[1]), reverse=True)  # sort statistics by diff_mean
 
-    for statistic in statistics_all:
-        statistic.append({'font_color': 'black'})
-
-    # select which features to keep based on diff_mean_percentage and p_value
-    statistics_current = [statistic for statistic in statistics_current if abs(statistic[2]) >= DIFF_MEAN_PERCENTAGE_CUTOFF]  # only keep statistics with big enough diff_mean_percentage value
-    statistics_current = [statistic for statistic in statistics_current if statistic[3] <= P_VALUE_CUTOFF]  # only keep statistics with low p_value
-
-    for statistic in statistics_all:
-        if statistic not in statistics_current:
-            statistic[5].update({'font_color': 'red'})
-
-    # group features and select the best feature from each group
-    statistics_current = sorted(statistics_current, key=lambda s: abs(s[2]), reverse=True)  # sort statistics by diff_mean_percentage
-    statistics_with_best_feature_per_group = []
-    for feature_group in feature_groups:
-        statistics_group = [statistic for statistic in statistics_current if (statistic[0] in feature_group)]
-        if statistics_group:
-            statistics_with_best_feature_per_group.append(statistics_group[0])
-    statistics_current = statistics_with_best_feature_per_group
-    statistics_current = sorted(statistics_current, key=lambda s: abs(s[2]), reverse=True)  # sort statistics by diff_mean_percentage
-
-    for statistic in statistics_all:
-        if statistic in statistics_current:
-            statistic[5].update({'bold': True})
-
-    # annotate groups by different background colours
-    for feature_group in feature_groups:
-        color = '#' + ('%02x' % (random.randrange(106) + 150)) + ('%02x' % (random.randrange(106) + 150)) + ('%02x' % (random.randrange(106) + 150))
-        for feature in feature_group:
-            for statistic in statistics_all:
-                #if statistic[0] == feature and statistic[5]['font_color] != 'red':
-                if statistic[0] == feature:
-                    statistic[5].update({'bg_color': color})
+    # print statistics to console
+    print("FEATURE,DIFF MEAN,P VALUE,T VALUE")
+    for statistic in statistics_current:
+        statistic_formatted = format(statistic[0], '50s') + "" + format(statistic[1], '+.20f') + ", " + format(statistic[2], '.20f') + ", " + format(statistic[3], '+.20f')
+        print(statistic_formatted)
 
     # print statistics into CSV file
     statistics_csv_file = open(STATISTICS_CSV_FILE_NAME, 'w')
-    statistics_csv_file.write("FEATURE,DIFF MEAN VALUE,DIFF MEAN PERCENTAGE,P VALUE,T VALUE\n")
+    statistics_csv_file.write("FEATURE,DIFF MEAN,P VALUE,T VALUE\n")
     for statistic in statistics_current:
-        statistic_formatted = statistic[0] + "," + format(statistic[1], '+50.20f') + "," + format(statistic[2], '+.20f') + "," + format(statistic[3], '.20f') + "," + format(statistic[4], '+.20f')
+        statistic_formatted = statistic[0] + "," + format(statistic[1], '+.20f') + "," + format(statistic[2], '.20f') + "," + format(statistic[3], '+.20f')
         statistics_csv_file.write(statistic_formatted + "\n")
     statistics_csv_file.close()
 
-    # write data into Excel file
-    statistics_all = sorted(statistics_all, key=lambda s: abs(s[2]), reverse=True)  # sort statistics by diff_mean_percentage
-    for filename in [STATISTICS_XLSX_FILE_NAME, CONDENSED_STATISTICS_XLSX_FILE_NAME]:
-        workbook = xlsxwriter.Workbook(filename)
-        worksheet = workbook.add_worksheet()
-        worksheet.set_column(0, 0, 40)
-        worksheet.set_column(1, 1, 25)
-        worksheet.set_column(2, 2, 20)
-        worksheet.set_column(3, 3, 25)
-        worksheet.set_column(4, 4, 20)
-
-        format_bold = workbook.add_format({'bold': True})
-        worksheet.write(0, 0, "FEATURE", format_bold)
-        worksheet.write(0, 1, "DIFF MEAN VALUE", format_bold)
-        worksheet.write(0, 2, "DIFF MEAN PERCENTAGE", format_bold)
-        worksheet.write(0, 3, "P VALUE", format_bold)
-        worksheet.write(0, 4, "T VALUE", format_bold)
-
-        row = 1
-        for statistic in statistics_all:
-            if (filename == STATISTICS_XLSX_FILE_NAME) or (filename == CONDENSED_STATISTICS_XLSX_FILE_NAME and statistic[5]['font_color'] != 'red'):
-                format0 = workbook.add_format(statistic[5])
-                format1 = workbook.add_format(statistic[5])
-                format1.set_num_format('0.0000000000')
-                format2 = workbook.add_format(statistic[5])
-                format2.set_num_format('0.0000000000')
-                format3 = workbook.add_format(statistic[5])
-                format3.set_num_format('0.00000000000000000000')
-                format4 = workbook.add_format(statistic[5])
-                format4.set_num_format('0.0000000000')
-                worksheet.write(row, 0, statistic[0], format0)
-                worksheet.write(row, 1, statistic[1], format1)
-                worksheet.write(row, 2, statistic[2], format2)
-                worksheet.write(row, 3, statistic[3], format3)
-                worksheet.write(row, 4, statistic[4], format4)
-                row += 1
-
-        workbook.close()
