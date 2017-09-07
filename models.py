@@ -16,26 +16,34 @@ from sklearn.utils import resample
 from sklearn.model_selection import StratifiedKFold
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
 import re
 import datetime
 import csv
 import multiprocessing as mp
 import warnings
 
-PERFORMANCES_FILE_NAME  = 'performances.csv'                                                   # default 'performances.csv'
-MODEL_NAME              = 'log_reg'                                                            # choose 'log_reg', 'svm', 'knn'
-CV_NUMBER_OF_SPLITS     = 5                                                                    # number of splits for cross-validation, default = 5
-USE_SCALED_DATA         = True                                                                 # default True
-SVM_FEATURES_TO_USE     = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
-SVM_NUMBER_OF_PROCESSES = 47                                                                   # number of processes to use for parallel computing in SVM, default 4 (47 for DSI cluster)
-SVM_KERNEL_LIST         = ['linear', 'poly', 'rbf', 'sigmoid']                                 # SVM kernel list, default ['linear', 'poly', 'rbf', 'sigmoid']
-SVM_MAX_ITER_LIST       = [(k * (10 ** exp)) for exp in range(1, 7, 1) for k in [1, 5]]        # SVM max iter list, default [10, 100, 1000, 5000, 10000, 50000, 100000]
-SVM_C_LIST              = [(k * (10 ** exp)) for exp in range(-15, 16, 1) for k in [1, 5]]     # SVM C list, default [(k * (10 ** exp)) for exp in range(-10, 11, 1) for k in [1, 5]]
-SVM_CACHE_SIZE          = 5000                                                                 # default 200 (5000 for DSI cluster)
-SVM_POLY_DEGREE_LIST    = [2, 3, 4, 5]                                                         # default [2,3,4,5]
-KNN_FEATURES_TO_USE     = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
-KNN_N_NEIGHBORS_LIST    = range(1, 201)                                                        # KNN number of nearest neighbors to use, default range(1, 51)
-RESAMPLE                = 'up'                                                                 # whether to upsample minority class ('up' -- default) or downsample majority class ('down') or use the original data distribution ('none')
+MODEL_NAME                   = 'forest'                                                             # choose 'log_reg', 'svm', 'knn', 'forest'
+PERFORMANCES_FILE_NAME       = 'performances.csv'                                                   # default 'performances.csv'
+VERBOSE                      = True                                                                 # if True (default), then performance statistics will be written to stdout
+CV_NUMBER_OF_SPLITS          = 5                                                                    # number of splits for cross-validation, default = 5
+USE_SCALED_DATA              = True                                                                 # default True
+RESAMPLE                     = 'up'                                                                 # whether to upsample minority class ('up' -- default) or downsample majority class ('down') or use the original data distribution ('none')
+SVM_FEATURES_TO_USE          = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
+SVM_NUMBER_OF_PROCESSES      = 47                                                                   # number of processes to use for parallel computing in SVM, default 4 (47 for DSI cluster)
+SVM_KERNEL_LIST              = ['linear', 'poly', 'rbf', 'sigmoid']                                 # SVM kernel list, default ['linear', 'poly', 'rbf', 'sigmoid']
+SVM_MAX_ITER_LIST            = [(k * (10 ** exp)) for exp in range(1, 7, 1) for k in [1, 5]]        # SVM max iter list, default [10, 100, 1000, 5000, 10000, 50000, 100000]
+SVM_C_LIST                   = [(k * (10 ** exp)) for exp in range(-15, 16, 1) for k in [1, 5]]     # SVM C list, default [(k * (10 ** exp)) for exp in range(-10, 11, 1) for k in [1, 5]]
+SVM_CACHE_SIZE               = 5000                                                                 # default 200 (5000 for DSI cluster)
+SVM_POLY_DEGREE_LIST         = [2, 3, 4, 5]                                                         # default [2,3,4,5]
+KNN_FEATURES_TO_USE          = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
+KNN_N_NEIGHBORS_LIST         = range(1, 201)                                                        # KNN number of nearest neighbors to use, default range(1, 51)
+FOREST_FEATURES_TO_USE       = 'features_extended_some_multiple_without_text_num_swears'            # default 'features_extended_some_multiple_without_text_num_swears'
+FOREST_NUMBER_OF_PROCESSES   = 47                                                                   # number of processes to use for parallel computing in SVM, default 4 (47 for DSI cluster)
+FOREST_N_ESTIMATORS_LIST     = range(1, 51)                                                         # number of trees in random forest to be used for classification, default: range(1, 51)
+FOREST_MAX_DEPTH_LIST        = [None] + range(1, 51)                                                # maximum depth of random forest, default: [None] + range(1, 51)
+FOREST_MAX_FEATURES_LIST     = ['sqrt', 'log2', 0.5, None]                                          # maximum number of features for random forest, default ['sqrt', 'log2', 0.5, None]
+FOREST_MIN_SAMPLES_LEAF_LIST = range(1, 26)                                                         # minimum number of samples in leaf for random forest, default range(1, 26)
 
 # define all features
 statistics_features = [
@@ -321,6 +329,44 @@ def add_derived_features(data):
 
     return data
 
+# function for up/down-sampling of data
+def resample_data(X_train, X_test, y_train, y_test):
+    data_train = pd.concat([y_train, X_train], axis=1)
+
+    if RESAMPLE == 'up':
+        # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
+        data_train_real = data_train[data_train.fake == 0]
+        data_train_fake = data_train[data_train.fake == 1]
+        data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
+        data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
+        y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
+
+        # convert pandas dataframes into numpy arrays
+        y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
+        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+        X_train_array, X_test_array, y_train_array, y_test_array = X_train_upsampled_array, X_test_array, y_train_upsampled_array, y_test_array
+
+    if RESAMPLE == 'down':
+        # in the training set, downsample majority class (ie other news class) so that it has the same number of rows as the minority class (ie fake news class)
+        data_train_real = data_train[data_train.fake == 0]
+        data_train_fake = data_train[data_train.fake == 1]
+        data_train_real_downsampled = resample(data_train_real, replace=True, n_samples=data_train_fake.shape[0], random_state=123)
+        data_train_downsampled = pd.concat([data_train_fake, data_train_real_downsampled])
+        y_train_downsampled, X_train_downsampled = dmatrices(features, data_train_downsampled, return_type='dataframe')
+
+        # convert pandas dataframes into numpy arrays
+        y_train_downsampled_array, X_train_downsampled_array = np.ravel(y_train_downsampled.values), X_train_downsampled.values
+        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+        X_train_array, X_test_array, y_train_array, y_test_array = X_train_downsampled_array, X_test_array, y_train_downsampled_array, y_test_array
+
+    if RESAMPLE == 'none':
+        y_train_array, X_train_array = np.ravel(y_train.values), X_train.values
+        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
+
+    return X_train_array, X_test_array, y_train_array, y_test_array
+
 # SVM functions
 def compute_svm_performance(writing_queue, X, y, SVM_KERNEL, SVM_POLY_DEGREE, SVM_MAX_ITER, SVM_C):
 
@@ -383,11 +429,14 @@ def svm_writer(writing_queue):
     performances_writer = csv.writer(performances_file)
 
     # write header to performances file
-    performances_writer.writerow(
-        ["datetime", "model", "kernel", "max_iter", "poly_degree", "C", "mean_accuracy_score", "mean_roc_auc_score",
-         "mean_precision_score", "mean_recall_score", "mean_f1_score", "mean_cm_TN", "mean_cm_FP",
-         "mean_cm_FN", "mean_cm_TP"]
-    )
+    performances_header = [
+        "datetime", "model", "kernel", "max_iter", "poly_degree", "C", "mean_accuracy_score", "mean_roc_auc_score",
+        "mean_precision_score", "mean_recall_score", "mean_f1_score", "mean_cm_TN", "mean_cm_FP",
+        "mean_cm_FN", "mean_cm_TP"
+    ]
+    if VERBOSE:
+        print("\t".join(performances_header))
+    performances_writer.writerow(performances_header)
 
     # keep writing into file data from queue
     while True:
@@ -399,7 +448,8 @@ def svm_writer(writing_queue):
             break
 
         # print averaged performances (from all folds) to terminal
-        print("\t".join(results))
+        if VERBOSE:
+            print("\t".join(results))
 
         # print averaged performances (from all folds) into CSV file
         performances_writer.writerow(results)
@@ -407,6 +457,7 @@ def svm_writer(writing_queue):
     # close file into which the model performances have been written
     performances_file.close()
 
+# logistic regression function
 def compute_logistic_regression_performance(X, y):
 
     # initialise scores lists
@@ -462,45 +513,9 @@ def compute_logistic_regression_performance(X, y):
         str(np.around(mean_confusion_matrix, 2)[1, 1]), str(features_weights_sorted)
     ]
 
-    print("\t".join(results))
+    return results
 
-def resample_data(X_train, X_test, y_train, y_test):
-    data_train = pd.concat([y_train, X_train], axis=1)
-
-    if RESAMPLE == 'up':
-        # in the training set, upsample minority class (ie fake news class) so that it has the same number of rows as the majority class (ie real news class)
-        data_train_real = data_train[data_train.fake == 0]
-        data_train_fake = data_train[data_train.fake == 1]
-        data_train_fake_upsampled = resample(data_train_fake, replace=True, n_samples=data_train_real.shape[0], random_state=123)
-        data_train_upsampled = pd.concat([data_train_real, data_train_fake_upsampled])
-        y_train_upsampled, X_train_upsampled = dmatrices(features, data_train_upsampled, return_type='dataframe')
-
-        # convert pandas dataframes into numpy arrays
-        y_train_upsampled_array, X_train_upsampled_array = np.ravel(y_train_upsampled.values), X_train_upsampled.values
-        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
-
-        X_train_array, X_test_array, y_train_array, y_test_array = X_train_upsampled_array, X_test_array, y_train_upsampled_array, y_test_array
-
-    if RESAMPLE == 'down':
-        # in the training set, downsample majority class (ie other news class) so that it has the same number of rows as the minority class (ie fake news class)
-        data_train_real = data_train[data_train.fake == 0]
-        data_train_fake = data_train[data_train.fake == 1]
-        data_train_real_downsampled = resample(data_train_real, replace=True, n_samples=data_train_fake.shape[0], random_state=123)
-        data_train_downsampled = pd.concat([data_train_fake, data_train_real_downsampled])
-        y_train_downsampled, X_train_downsampled = dmatrices(features, data_train_downsampled, return_type='dataframe')
-
-        # convert pandas dataframes into numpy arrays
-        y_train_downsampled_array, X_train_downsampled_array = np.ravel(y_train_downsampled.values), X_train_downsampled.values
-        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
-
-        X_train_array, X_test_array, y_train_array, y_test_array = X_train_downsampled_array, X_test_array, y_train_downsampled_array, y_test_array
-
-    if RESAMPLE == 'none':
-        y_train_array, X_train_array = np.ravel(y_train.values), X_train.values
-        y_test_array, X_test_array = np.ravel(y_test.values), X_test.values
-
-    return X_train_array, X_test_array, y_train_array, y_test_array
-
+# KNN function
 def compute_knn_performance(X, y, KNN_N_NEIGHBORS):
 
     # initialise scores lists
@@ -553,6 +568,94 @@ def compute_knn_performance(X, y, KNN_N_NEIGHBORS):
 
     return results
 
+# random forest functions
+def compute_forest_performance(writing_queue, X, y, FOREST_N_ESTIMATORS, FOREST_MAX_DEPTH, FOREST_MIN_SAMPLES_LEAF, FOREST_MAX_FEATURES):
+
+    # initialise scores lists
+    accuracy_scores, roc_auc_scores, confusion_matrices, classification_reports, precision_scores, recall_scores, f1_scores = [], [], [], [], [], [], []
+
+    # get Numpy arrays from Pandas dataframes
+    y_array, X_array = np.ravel(y.values), X.values
+
+    # use a Stratified K-Fold cross-validation method with minority class upsampling during training
+    cv = StratifiedKFold(n_splits=CV_NUMBER_OF_SPLITS, shuffle=True, random_state=123)
+
+    for train_index, test_index in cv.split(X_array, y_array):
+        # select train and test data based on indices from the Stratified K-Fold Cross-Validation function
+        X_train, X_test, y_train, y_test = X.iloc[train_index, :], X.iloc[test_index, :], y.iloc[train_index, :], y.iloc[test_index, :]
+
+        # up/down-sample data to balance the training data set
+        X_train_array, X_test_array, y_train_array, y_test_array = resample_data(X_train, X_test, y_train, y_test)
+
+        # fit model
+        model = RandomForestClassifier(n_estimators=FOREST_N_ESTIMATORS, max_depth=FOREST_MAX_DEPTH, min_samples_leaf=FOREST_MIN_SAMPLES_LEAF, max_features=FOREST_MAX_FEATURES, random_state=123)
+        model.fit(X_train_array, y_train_array)
+
+        # calculate performances for one fold
+        y_pred = model.predict(X_test_array)
+        y_pred_proba = model.predict_proba(X_test_array)
+        accuracy_scores.append(metrics.accuracy_score(y_test_array, y_pred))
+        roc_auc_scores.append(metrics.roc_auc_score(y_test_array, y_pred_proba[:, 1]))
+        confusion_matrices.append(metrics.confusion_matrix(y_test_array, y_pred))
+        classification_reports.append(metrics.classification_report(y_test_array, y_pred))
+        precision_scores.append(metrics.precision_score(y_test_array, y_pred))
+        recall_scores.append(metrics.recall_score(y_test_array, y_pred))
+        f1_scores.append(metrics.f1_score(y_test_array, y_pred))
+
+    # calculate averaged performances (from all folds)
+    mean_accuracy_score = np.mean(accuracy_scores)
+    mean_roc_auc_score = np.mean(roc_auc_scores)
+    mean_confusion_matrix = np.mean(confusion_matrices, axis=0)
+    mean_precision_score = np.mean(precision_scores)
+    mean_recall_score = np.mean(recall_scores)
+    mean_f1_score = np.mean(f1_scores)
+
+    results = [
+        str(datetime.datetime.now()), MODEL_NAME, str(FOREST_N_ESTIMATORS), str(FOREST_MAX_DEPTH),
+        str(FOREST_MIN_SAMPLES_LEAF), str(FOREST_MAX_FEATURES), format(mean_accuracy_score, '0.10f'),
+        format(mean_roc_auc_score, '0.10f'), format(mean_precision_score, '0.10f'), format(mean_recall_score, '0.10f'),
+        format(mean_f1_score, '0.10f'), str(np.around(mean_confusion_matrix, 2)[0,0]),
+        str(np.around(mean_confusion_matrix, 2)[0,1]), str(np.around(mean_confusion_matrix, 2)[1,0]),
+        str(np.around(mean_confusion_matrix, 2)[1,1])
+    ]
+
+    writing_queue.put(results)
+    return 'done'
+def forest_writer(writing_queue):
+    # open file to write model performances into
+    performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
+    performances_writer = csv.writer(performances_file)
+
+    # write header to performances file
+    performances_header = [
+        "datetime", "model", "n_estimators", "max_depth", "min_samples_leaf", "max_features",
+        "mean_accuracy_score", "mean_roc_auc_score",
+        "mean_precision_score", "mean_recall_score", "mean_f1_score", "mean_cm_TN", "mean_cm_FP",
+        "mean_cm_FN", "mean_cm_TP"
+    ]
+    if VERBOSE:
+        print("\t".join(performances_header))
+    performances_writer.writerow(performances_header)
+
+    # keep writing into file data from queue
+    while True:
+        # wait for result to appear in the queue
+        results = writing_queue.get()
+
+        # if got signal 'kill' exit the loop
+        if results == 'kill':
+            break
+
+        # print averaged performances (from all folds) to terminal
+        if VERBOSE:
+            print("\t".join(results))
+
+        # print averaged performances (from all folds) into CSV file
+        performances_writer.writerow(results)
+
+    # close file into which the model performances have been written
+    performances_file.close()
+
 if __name__ == '__main__':
 
     # import data from TSV file
@@ -572,21 +675,39 @@ if __name__ == '__main__':
 
     if MODEL_NAME == 'log_reg':
 
+        # open file to write model performances into
+        performances_file = open(PERFORMANCES_FILE_NAME, 'wb')
+        performances_writer = csv.writer(performances_file)
+
         results_header = [
             "mean_accuracy_score", "mean_roc_auc_score", "mean_precision_score", "mean_recall_score", "mean_f1_score",
             "mean_cm_TN", "mean_cm_FP", "mean_cm_FN", "mean_cm_TP", "features_weights_sorted"
         ]
-        print("\t".join(results_header))
+        if VERBOSE:
+            print("\t".join(results_header))
+        performances_writer.writerow(results_header)
 
         for LOG_REG_FEATURE_SET_NAME in FEATURES:
 
-            # choose feature set given by FEATURES_TO_USE
+            # choose feature set given by FEATURES_TO_USE and print it to stdout and CSV file
             features = FEATURES[LOG_REG_FEATURE_SET_NAME]
-            print(LOG_REG_FEATURE_SET_NAME)
+            if VERBOSE:
+                print(LOG_REG_FEATURE_SET_NAME)
+            performances_writer.writerow([LOG_REG_FEATURE_SET_NAME])
+
             # get feature and label data based on 'features' variable
             y, X = dmatrices(features, data, return_type='dataframe')
 
-            compute_logistic_regression_performance(X, y)
+            # calculate performances
+            results = compute_logistic_regression_performance(X, y)
+
+            # print averaged performances (from all folds) to terminal and CSV file
+            if VERBOSE:
+                print("\t".join(results))
+            performances_writer.writerow(results)
+
+        # close file into which the model performances have been written
+        performances_file.close()
 
     if MODEL_NAME == 'svm':
 
@@ -629,7 +750,8 @@ if __name__ == '__main__':
             "n_neighbors", "mean_accuracy_score", "mean_roc_auc_score", "mean_precision_score", "mean_recall_score",
             "mean_f1_score", "mean_cm_TN", "mean_cm_FP", "mean_cm_FN", "mean_cm_TP"
         ]
-        print("\t".join(results_header))
+        if VERBOSE:
+            print("\t".join(results_header))
         performances_writer.writerow(results_header)
 
         # choose feature set given by FEATURES_TO_USE
@@ -641,8 +763,38 @@ if __name__ == '__main__':
             # calculate performances
             results = compute_knn_performance(X, y, KNN_N_NEIGHBORS)
             # print averaged performances (from all folds) to terminal and CSV file
-            print("\t".join(results))
+            if VERBOSE:
+                print("\t".join(results))
             performances_writer.writerow(results)
 
         # close file into which the model performances have been written
         performances_file.close()
+
+    if MODEL_NAME == 'forest':
+
+        # choose feature set given by FEATURES_TO_USE
+        features = FEATURES[FOREST_FEATURES_TO_USE]
+        # get feature and label data based on 'features' variable
+        y, X = dmatrices(features, data, return_type='dataframe')
+
+        # set up parallel processing (init writing queue, init jobs list, init processes pool, start svm_writer listener)
+        manager = mp.Manager()
+        writing_queue = manager.Queue()
+        jobs = []
+        pool = mp.Pool(processes=FOREST_NUMBER_OF_PROCESSES + 1) # additional 1 process is for forest_writer which shouldn't take up much CPU power
+        pool.apply_async(forest_writer, (writing_queue,))
+
+        # calculate performances
+        for FOREST_N_ESTIMATORS in FOREST_N_ESTIMATORS_LIST:
+            for FOREST_MAX_DEPTH in FOREST_MAX_DEPTH_LIST:
+                for FOREST_MIN_SAMPLES_LEAF in FOREST_MIN_SAMPLES_LEAF_LIST:
+                    for FOREST_MAX_FEATURES in FOREST_MAX_FEATURES_LIST:
+                        jobs.append(pool.apply_async(compute_forest_performance, (writing_queue, X, y, FOREST_N_ESTIMATORS, FOREST_MAX_DEPTH, FOREST_MIN_SAMPLES_LEAF, FOREST_MAX_FEATURES)))
+
+        # clean up parallel processing (close pool, wait for processes to finish, kill writing_queue, wait for queue to be killed)
+        pool.close()
+        for job in jobs:
+            job.get()
+        writing_queue.put('kill')
+        pool.join()
+        print("DONE")
