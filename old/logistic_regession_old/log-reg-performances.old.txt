@@ -1,0 +1,120 @@
+*************************************************
+* BASE FEATURES INCLUDING HIGH P-VALUE FEATURES *
+*************************************************
+
+model score (probabilistic): 0.600091
+mean fake news percentage in test set: 0.135007
+[[763 512]
+ [ 86 113]]
+             precision    recall  f1-score   support
+
+        0.0       0.90      0.60      0.72      1275
+        1.0       0.18      0.57      0.27       199
+
+avg / total       0.80      0.59      0.66      1474
+
+                       0                   1
+0              Intercept   0.079052891598656
+1          retweet_count  -0.000011472586237
+2          user_verified  -0.565007774724040
+3     user_friends_count   0.000001615908228
+4   user_followers_count  -0.000000014183048
+5  user_favourites_count   0.000000985394792
+6           num_hashtags  -0.048963368052245
+7           num_mentions   0.084725094334907
+8               num_urls   0.312887408697228
+9              num_media  -0.137674176868169
+
+
+*************************************************
+* BASE FEATURES EXCLUDING HIGH P-VALUE FEATURES *
+*************************************************
+
+
+model score (binary): 0.546811
+model score (probabilistic): 0.596409
+mean fake news percentage in test set: 0.135007
+[[688 587]
+ [ 81 118]]
+             precision    recall  f1-score   support
+
+        0.0       0.89      0.54      0.67      1275
+        1.0       0.17      0.59      0.26       199
+
+avg / total       0.80      0.55      0.62      1474
+
+                      0                   1
+0             Intercept   0.147096080404341
+1         user_verified  -0.559596548565115
+2    user_friends_count   0.000001832210204
+3  user_followers_count  -0.000000013041242
+4              num_urls   0.310449600118570
+5             num_media  -0.113865875895781
+
+
+
+**********************************************************************************
+* DERIVED FEATURES (INCL CREATED_AT DERIVATIVES) INCLUDING HIGH P-VALUE FEATURES *
+**********************************************************************************
+
+
+model score (binary): 0.608548
+model score (probabilistic): 0.655604
+mean fake news percentage in test set: 0.135007
+[[775 500]
+ [ 77 122]]
+             precision    recall  f1-score   support
+
+        0.0       0.91      0.61      0.73      1275
+        1.0       0.20      0.61      0.30       199
+
+avg / total       0.81      0.61      0.67      1474
+
+FEATURE                                  WEIGHT
+user_screen_name_has_special_chars       +0.585380949627725
+created_at_hour_13_to_22                 +0.523205538913389
+user_verified                            -0.499171084038694
+Intercept                                -0.477818122151280
+created_at_hour_23_to_5                  +0.296121693254082
+created_at_weekday_sun_mon_tue           +0.253733261094582
+num_urls                                 +0.215243431616516
+num_media                                -0.196979183004322
+num_hashtags                             -0.130018256269496
+num_mentions                             +0.025731969702131
+text_number_of_caps                      +0.023783358160921
+retweet_count                            -0.000007931133817
+user_friends_count                       +0.000001324513391
+user_favourites_count                    +0.000000766395372
+user_followers_count                     -0.000000015622696
+
+
+
+*********************************************************************************
+* DERIVED FEATURES (W/O CREATED_AT DERIVATIVES) INCLUDING HIGH P-VALUE FEATURES *
+*********************************************************************************
+
+model score (binary): 0.604478
+model score (probabilistic): 0.647615
+mean fake news percentage in test set: 0.135007
+[[770 505]
+ [ 78 121]]
+             precision    recall  f1-score   support
+
+        0.0       0.91      0.60      0.73      1275
+        1.0       0.19      0.61      0.29       199
+
+avg / total       0.81      0.60      0.67      1474
+
+FEATURE                                  WEIGHT
+user_screen_name_has_special_chars       +0.606061543847554
+user_verified                            -0.477745608217143
+num_urls                                 +0.239022471794413
+Intercept                                -0.235550194126029
+num_media                                -0.176574349855233
+num_hashtags                             -0.127694805799203
+num_mentions                             +0.027538062001404
+text_number_of_caps                      +0.022511276047972
+retweet_count                            -0.000008260050562
+user_friends_count                       +0.000001341221045
+user_favourites_count                    +0.000000935500920
+user_followers_count                     -0.000000017626783

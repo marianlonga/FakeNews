@@ -23,7 +23,7 @@ import csv
 import multiprocessing as mp
 import warnings
 
-MODEL_NAME                   = 'forest'                                                             # choose 'log_reg', 'svm', 'knn', 'forest'
+MODEL_NAME                   = 'log_reg'                                                            # choose 'log_reg', 'svm', 'knn', 'forest'
 PERFORMANCES_FILE_NAME       = 'performances.csv'                                                   # default 'performances.csv'
 VERBOSE                      = True                                                                 # if True (default), then performance statistics will be written to stdout
 CV_NUMBER_OF_SPLITS          = 5                                                                    # number of splits for cross-validation, default = 5
